@@ -1,0 +1,48 @@
+services:
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: webhook-service:latest
+    container_name: webhook-service
+    ports:
+      - 8001:8001
+    environment:
+      - WEBHOOK_PORT=8001
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=gowa
+      - RABBITMQ_PASSWORD=mantab
+      - RABBITMQ_VHOST=/
+      - EXCHANGE_NAME=gowa
+      - QUEUE_PREFIX=gowa_
+      - MESSAGE_TTL_MINUTES=4320 # Default: 3 days = 4320 minutes
+      - MAX_QUEUE_LENGTH=50000 # default 50000
+      - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
+      - TZ=Asia/Jakarta
+    networks:
+      - cloudflared-net
+    restart: unless-stopped
+  backup:
+    image: offen/docker-volume-backup:v2
+    container_name: webhook-service-backup
+    restart: unless-stopped
+    environment:
+      BACKUP_CRON_EXPRESSION: 0 2 * * 0 # backup setiap minggu pagi
+      BACKUP_FILENAME: webhook-service-backup-%Y-%m-%dT%H-%M-%S.tar.gz
+      BACKUP_LATEST_SYMLINK: webhook-service-backup-latest.tar.gz
+      # BACKUP_STOP_DURING_BACKUP_NO_RESTART_LABEL: webhook-service
+      BACKUP_RETENTION_DAYS: "8"
+      BACKUP_PRUNING_PREFIX: webhook-service-backup-
+      NOTIFICATION_URLS: ntfy://ntfy.sh/monitor-server-30AhxaPwq00MzspW
+      NOTIFICATION_LEVEL: info
+    volumes:
+      - ./:/backup/webhook-service:ro
+      - /home/lighthouse/backups:/archive
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+networks:
+  cloudflared-net:
+    external: true
+    name: cloudflared-net
