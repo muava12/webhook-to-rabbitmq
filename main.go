@@ -54,6 +54,7 @@ var (
 // ===== KONFIGURASI SERVICES (MINIMAL) =====
 var WEBHOOK_SERVICES = []string{
 	"molagis",
+	"molagis_2",
 	"muafa", 
 	"kurir",
 }
