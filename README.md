@@ -51,7 +51,6 @@ docker run -d \
   ghcr.io/muava12/webhook-to-rabbitmq:latest
 ```
 
-> **Note:** Ganti `YOUR_USERNAME` dengan username GitHub Anda.
 
 ### Menggunakan Docker Compose
 

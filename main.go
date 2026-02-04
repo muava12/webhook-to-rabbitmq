@@ -9,6 +9,7 @@ import (
     "net/http"
     "os"
     "strconv"
+    "strings"
     "sync"
     "time"
 
@@ -41,6 +42,7 @@ var (
 	RETRY_ENABLED     = getEnvBool("RETRY_ENABLED", true)      // Enable/disable retry mechanism
 	RETRY_DELAY       = getEnvInt("RETRY_DELAY", 60)           // Delay before retry in seconds (default: 60s)
 	DLX_EXCHANGE_NAME = getEnv("DLX_EXCHANGE_NAME", "")        // Dead Letter Exchange (auto-generated if empty)
+	EXTRA_QUEUES_CONFIG = getEnv("EXTRA_QUEUES", "")           // Extra queues config (e.g. "molagis:2")
 
 
 	// Reduced memory footprint configuration
@@ -54,7 +56,6 @@ var (
 // ===== KONFIGURASI SERVICES (MINIMAL) =====
 var WEBHOOK_SERVICES = []string{
 	"molagis",
-	"molagis_2",
 	"muafa", 
 	"kurir",
 }
@@ -119,6 +120,25 @@ func getDLXExchangeName() string {
 	return EXCHANGE_NAME + "_dlx"
 }
 
+// Parse extra queues config: "molagis:2,other:3" -> map["molagis"][]string{"2"}
+func getExtraQueuesMap() map[string][]string {
+	config := map[string][]string{}
+	if EXTRA_QUEUES_CONFIG == "" {
+		return config
+	}
+	
+	pairs := strings.Split(EXTRA_QUEUES_CONFIG, ",")
+	for _, p := range pairs {
+		parts := strings.Split(p, ":")
+		if len(parts) == 2 {
+			service := strings.TrimSpace(parts[0])
+			suffix := strings.TrimSpace(parts[1])
+			config[service] = append(config[service], suffix)
+		}
+	}
+	return config
+}
+
 func getRabbitMQURL() string {
 	return fmt.Sprintf("amqp://%s:%s@%s:%s%s",
 		RABBITMQ_USER, RABBITMQ_PASSWORD, RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_VHOST)
@@ -132,7 +152,7 @@ func getWebhookConfig(service string) (string, string, string) {
 }
 
 // Get queue arguments with MESSAGE TTL and DLX (Dead Letter Exchange)
-func getQueueArguments() amqp.Table {
+func getQueueArguments(dlxRoutingKey string) amqp.Table {
 	args := amqp.Table{}
 	
 	// Convert minutes to milliseconds for RabbitMQ
@@ -149,6 +169,10 @@ func getQueueArguments() amqp.Table {
 	// Add Dead Letter Exchange if retry is enabled
 	if RETRY_ENABLED {
 		args["x-dead-letter-exchange"] = getDLXExchangeName()
+		// If explicit DLX routing key is provided, use it. Otherwise RabbitMQ uses original routing key.
+		if dlxRoutingKey != "" {
+			args["x-dead-letter-routing-key"] = dlxRoutingKey
+		}
 	}
 	
 	return args
@@ -156,11 +180,11 @@ func getQueueArguments() amqp.Table {
 
 // Get retry queue arguments - single retry queue with delay
 // Messages wait here, then return to main queue for re-processing
-func getRetryQueueArguments(delaySeconds int, routingKey string) amqp.Table {
+func getRetryQueueArguments(delaySeconds int, returnRoutingKey string) amqp.Table {
 	return amqp.Table{
 		"x-message-ttl":             int32(delaySeconds * 1000), // Wait time before retry
 		"x-dead-letter-exchange":    EXCHANGE_NAME,              // Route back to main exchange
-		"x-dead-letter-routing-key": routingKey,                 // Use original routing key
+		"x-dead-letter-routing-key": returnRoutingKey,                 // Return to specific queue
 		"x-max-length":              int32(1000),                // Limit retry queue size
 		"x-overflow":                "reject-publish",           // Reject new messages when full (goes to DLQ)
 	}
@@ -304,66 +328,37 @@ func (ws *WebhookService) connectRabbitMQ() error {
 		log.Printf("Declared DLX exchange: %s", dlxName)
 	}
 
-	// Get queue arguments with MESSAGE TTL and DLX
-	queueArgs := getQueueArguments()
+	// Get extra queues configuration
+	extraQueuesMap := getExtraQueuesMap()
+
 	// Declare queues for each service
 	for _, service := range WEBHOOK_SERVICES {
 		_, routingKey, queueName := getWebhookConfig(service)
 		
-		// Declare main queue with DLX arguments - durable=true, autoDelete=false
-		_, err = ws.channel.QueueDeclare(queueName, true, false, false, false, queueArgs)
-		if err != nil {
-			ws.channel.Close()
-			ws.conn.Close()
-			return fmt.Errorf("failed to declare queue %s: %v", queueName, err)
+		// 1. Declare MAIN Service Queue
+		// Unique return key for main queue: routingKey + ".main"
+		// DLX routing key for main queue: routingKey + ".dlx.main"
+		mainReturnKey := routingKey + ".main"
+		mainDlxKey := routingKey + ".dlx.main"
+		
+		if err := ws.declareQueueSet(service, queueName, routingKey, mainReturnKey, mainDlxKey); err != nil {
+			return err
 		}
 
-		// Bind main queue to main exchange
-		err = ws.channel.QueueBind(queueName, routingKey, EXCHANGE_NAME, false, nil)
-		if err != nil {
-			ws.channel.Close()
-			ws.conn.Close()
-			return fmt.Errorf("failed to bind queue %s to routing key %s: %v", queueName, routingKey, err)
-		}
-
-		// Declare retry queue and DLQ if retry is enabled
-		if RETRY_ENABLED {
-			dlxName := getDLXExchangeName()
-			
-			// Declare single retry queue with delay
-			retryQueueName := fmt.Sprintf("%s_retry", queueName)
-			retryDelay := RETRY_DELAY // Delay before retry
-			retryArgs := getRetryQueueArguments(retryDelay, routingKey)
-			
-			_, err = ws.channel.QueueDeclare(retryQueueName, true, false, false, false, retryArgs)
-			if err != nil {
-				ws.channel.Close()
-				ws.conn.Close()
-				return fmt.Errorf("failed to declare retry queue %s: %v", retryQueueName, err)
+		// 2. Declare EXTRA Queues (if any)
+		if suffixes, ok := extraQueuesMap[service]; ok {
+			for _, suffix := range suffixes {
+				extraQueueName := fmt.Sprintf("%s_%s", queueName, suffix)
+				// Shared routing key remains the same (routingKey) -> fanout behavior
+				// Unique keys for this specific queue:
+				extraReturnKey := fmt.Sprintf("%s.%s", routingKey, suffix)
+				extraDlxKey := fmt.Sprintf("%s.dlx.%s", routingKey, suffix)
+				
+				log.Printf("Setting up extra queue: %s (suffix: %s) for service: %s", extraQueueName, suffix, service)
+				if err := ws.declareQueueSet(service, extraQueueName, routingKey, extraReturnKey, extraDlxKey); err != nil {
+					return err
+				}
 			}
-			
-			// Bind retry queue to DLX (receives rejected messages from main queue)
-			err = ws.channel.QueueBind(retryQueueName, routingKey, dlxName, false, nil)
-			if err != nil {
-				ws.channel.Close()
-				ws.conn.Close()
-				return fmt.Errorf("failed to bind retry queue %s: %v", retryQueueName, err)
-			}
-			
-			// Declare DLQ (final dead letter queue for manual review)
-			dlqName := fmt.Sprintf("%s_dlq", queueName)
-			dlqArgs := getDLQArguments()
-			
-			_, err = ws.channel.QueueDeclare(dlqName, true, false, false, false, dlqArgs)
-			if err != nil {
-				ws.channel.Close()
-				ws.conn.Close()
-				return fmt.Errorf("failed to declare DLQ %s: %v", dlqName, err)
-			}
-			
-			// Note: DLQ receives messages when retry queue overflows (x-overflow: reject-publish)
-			// DLQ is NOT bound to DLX - it's populated when retry queue rejects due to overflow
-			log.Printf("Declared retry queue: %s (delay: %ds), DLQ: %s", retryQueueName, retryDelay, dlqName)
 		}
 	}
 
@@ -374,9 +369,82 @@ func (ws *WebhookService) connectRabbitMQ() error {
 	if RETRY_ENABLED {
 		log.Printf("Retry enabled with %d second delay", RETRY_DELAY)
 		log.Printf("DLX Exchange: %s", getDLXExchangeName())
+		if EXTRA_QUEUES_CONFIG != "" {
+			log.Printf("Extra queues configured: %s", EXTRA_QUEUES_CONFIG)
+		}
 	} else {
 		log.Printf("Retry disabled")
 	}
+	return nil
+}
+
+// declareQueueSet declares a main queue, determines its DLX/Retry/DLQ setup, and binds it.
+// sharedRoutingKey: The routing key (e.g. "wa.molagis") that traffic initially comes in on.
+// returnRoutingKey: A unique routing key (e.g. "wa.molagis.main") used for RETRY returns to targeting THIS queue specifically.
+// dlxRoutingKey: A unique routing key (e.g. "wa.molagis.dlx.main") to route rejected messages to the DLX for THIS queue specifically.
+func (ws *WebhookService) declareQueueSet(serviceName, queueName, sharedRoutingKey, returnRoutingKey, dlxRoutingKey string) error {
+	// Prepare queue arguments
+	// We MUST set x-dead-letter-routing-key to a UNIQUE value for this queue,
+	// so that when retry queue expires, it knows exactly which MAIN queue to return to.
+	// Wait, x-dead-letter-exchange on Main Queue routes to DLX.
+	// So we need unique key for DLX to know which RETRY queue to route to.
+	queueArgs := getQueueArguments(dlxRoutingKey)
+
+	// Declare queue
+	_, err := ws.channel.QueueDeclare(queueName, true, false, false, false, queueArgs)
+	if err != nil {
+		return fmt.Errorf("failed to declare queue %s: %v", queueName, err)
+	}
+
+	// 1. Bind to SHARED routing key (Primary input)
+	err = ws.channel.QueueBind(queueName, sharedRoutingKey, EXCHANGE_NAME, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to bind queue %s to shared key %s: %v", queueName, sharedRoutingKey, err)
+	}
+
+	// 2. Bind to UNIQUE RETURN key (Retry return input)
+	err = ws.channel.QueueBind(queueName, returnRoutingKey, EXCHANGE_NAME, false, nil)
+	if err != nil {
+		return fmt.Errorf("failed to bind queue %s to return key %s: %v", queueName, returnRoutingKey, err)
+	}
+
+	if RETRY_ENABLED {
+		dlxName := getDLXExchangeName()
+		
+		// Declare Retry Queue
+		retryQueueName := fmt.Sprintf("%s_retry", queueName)
+		retryDelay := RETRY_DELAY
+		// Retry queue returns to the UNIQUE RETURN KEY
+		retryArgs := getRetryQueueArguments(retryDelay, returnRoutingKey)
+		
+		_, err = ws.channel.QueueDeclare(retryQueueName, true, false, false, false, retryArgs)
+		if err != nil {
+			return fmt.Errorf("failed to declare retry queue %s: %v", retryQueueName, err)
+		}
+		
+		// Bind Retry Queue to DLX using the DLX Routing Key
+		// This receives the REJECTED messages from the Main Queue
+		err = ws.channel.QueueBind(retryQueueName, dlxRoutingKey, dlxName, false, nil)
+		if err != nil {
+			return fmt.Errorf("failed to bind retry queue %s: %v", retryQueueName, err)
+		}
+
+		// Declare DLQ (Dead Letter Queue) - for overflow
+		dlqName := fmt.Sprintf("%s_dlq", queueName)
+		dlqArgs := getDLQArguments()
+		
+		_, err = ws.channel.QueueDeclare(dlqName, true, false, false, false, dlqArgs)
+		if err != nil {
+			return fmt.Errorf("failed to declare DLQ %s: %v", dlqName, err)
+		}
+		// DLQ in this simplified design is for overflow, so explicit binding isn't strictly needed 
+		// unless we want to route "hopeless" messages there. 
+		// For now, it's an overflow bucket.
+		
+		log.Printf("Declared queue: %s [Bind: %s, %s] -> DLX Key: %s -> Retry: %s -> Return Key: %s", 
+			queueName, sharedRoutingKey, returnRoutingKey, dlxRoutingKey, retryQueueName, returnRoutingKey)
+	}
+
 	return nil
 }
 

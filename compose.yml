@@ -21,6 +21,7 @@ services:
       # Retry Configuration
       - RETRY_ENABLED=true # Enable retry mechanism with DLX
       - RETRY_DELAY=60 # Delay before retry in seconds (default: 60 seconds)
+      - EXTRA_QUEUES=molagis:2 # Fanout configuration: Create gowa_molagis_2 bound to routing key wa.molagis
       - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
       - TZ=Asia/Jakarta
     networks:
