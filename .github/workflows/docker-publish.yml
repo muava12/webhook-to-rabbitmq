@@ -52,6 +52,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -61,3 +62,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
+
+      - name: Notify Success
+        if: success() && github.event_name != 'pull_request'
+        run: |
+          curl -X POST "https://ntfy.sh/deploy-on-github-xasr6KBz47PjswPf53A78Fib" \
+            -H "Title: ✅ Deploy Berhasil" \
+            -H "Priority: default" \
+            -H "Tags: white_check_mark,docker" \
+            -d "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          Commit: ${{ github.sha }}
+          By: ${{ github.actor }}"
+
+      - name: Notify Failure
+        if: failure()
+        run: |
+          curl -X POST "https://ntfy.sh/deploy-on-github-xasr6KBz47PjswPf53A78Fib" \
+            -H "Title: ❌ Deploy Gagal" \
+            -H "Priority: high" \
+            -H "Tags: x,docker" \
+            -d "Repository: ${{ github.repository }}
+          Commit: ${{ github.sha }}
+          By: ${{ github.actor }}
+          Check: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
