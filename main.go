@@ -30,12 +30,18 @@ var (
 	EXCHANGE_NAME     = getEnv("EXCHANGE_NAME", "wuzapi")
 
 	// Queue Configuration
-	QUEUE_PREFIX      = getEnv("QUEUE_PREFIX", "wuzapi_")        // NEW: Configurable queue prefix
-	ROUTING_PREFIX    = getEnv("ROUTING_PREFIX", "wa")          // NEW: Configurable routing key prefix
+	QUEUE_PREFIX      = getEnv("QUEUE_PREFIX", "wuzapi_")        // Configurable queue prefix
+	ROUTING_PREFIX    = getEnv("ROUTING_PREFIX", "wa")          // Configurable routing key prefix
 	
-	// TTL Configuration (NEW) - in minutes for environment, converted to milliseconds internally
+	// TTL Configuration - in minutes for environment, converted to milliseconds internally
 	MESSAGE_TTL_MINUTES = getEnvInt("MESSAGE_TTL_MINUTES", 4320)  // Default: 3 days = 4320 minutes
 	MAX_QUEUE_LENGTH    = getEnvInt("MAX_QUEUE_LENGTH", 50000)    // Increased default for 3-day retention
+
+	// Retry Configuration
+	RETRY_ENABLED     = getEnvBool("RETRY_ENABLED", true)      // Enable/disable retry mechanism
+	RETRY_DELAY       = getEnvInt("RETRY_DELAY", 60)           // Delay before retry in seconds (default: 60s)
+	DLX_EXCHANGE_NAME = getEnv("DLX_EXCHANGE_NAME", "")        // Dead Letter Exchange (auto-generated if empty)
+
 
 	// Reduced memory footprint configuration
 	HEALTH_CHECK_INTERVAL = 15 * time.Second  // Increased from 5s
@@ -95,6 +101,23 @@ func getEnvInt(key string, fallback int) int {
 	return fallback
 }
 
+func getEnvBool(key string, fallback bool) bool {
+	if value, exists := os.LookupEnv(key); exists {
+		if boolValue, err := strconv.ParseBool(value); err == nil {
+			return boolValue
+		}
+	}
+	return fallback
+}
+
+// Get DLX exchange name (auto-generate if not set)
+func getDLXExchangeName() string {
+	if DLX_EXCHANGE_NAME != "" {
+		return DLX_EXCHANGE_NAME
+	}
+	return EXCHANGE_NAME + "_dlx"
+}
+
 func getRabbitMQURL() string {
 	return fmt.Sprintf("amqp://%s:%s@%s:%s%s",
 		RABBITMQ_USER, RABBITMQ_PASSWORD, RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_VHOST)
@@ -107,7 +130,7 @@ func getWebhookConfig(service string) (string, string, string) {
 		   fmt.Sprintf("%s%s", QUEUE_PREFIX, service)
 }
 
-// NEW: Get queue arguments with MESSAGE TTL only (no queue auto-delete)
+// Get queue arguments with MESSAGE TTL and DLX (Dead Letter Exchange)
 func getQueueArguments() amqp.Table {
 	args := amqp.Table{}
 	
@@ -122,9 +145,32 @@ func getQueueArguments() amqp.Table {
 		args["x-overflow"] = "drop-head" // Drop oldest messages when limit reached
 	}
 	
-	// NO x-expires (queue TTL) - queue will persist
+	// Add Dead Letter Exchange if retry is enabled
+	if RETRY_ENABLED {
+		args["x-dead-letter-exchange"] = getDLXExchangeName()
+	}
 	
 	return args
+}
+
+// Get retry queue arguments - single retry queue with delay
+// Messages wait here, then return to main queue for re-processing
+func getRetryQueueArguments(delaySeconds int, routingKey string) amqp.Table {
+	return amqp.Table{
+		"x-message-ttl":             int32(delaySeconds * 1000), // Wait time before retry
+		"x-dead-letter-exchange":    EXCHANGE_NAME,              // Route back to main exchange
+		"x-dead-letter-routing-key": routingKey,                 // Use original routing key
+		"x-max-length":              int32(1000),                // Limit retry queue size
+		"x-overflow":                "reject-publish",           // Reject new messages when full (goes to DLQ)
+	}
+}
+
+// Get DLQ (final dead letter queue) arguments
+// Messages that can't be processed go here for manual review
+func getDLQArguments() amqp.Table {
+	return amqp.Table{
+		"x-message-ttl": int32(MESSAGE_TTL_MINUTES * 60 * 1000), // Same TTL as main queue
+	}
 }
 
 // Helper function to get message TTL in milliseconds
@@ -220,7 +266,7 @@ func (ws *WebhookService) notifyServiceStarted() {
 	})
 }
 
-// ===== RABBITMQ FUNCTIONS (OPTIMIZED WITH MESSAGE TTL ONLY) =====
+// ===== RABBITMQ FUNCTIONS (WITH RETRY MECHANISM) =====
 func (ws *WebhookService) connectRabbitMQ() error {
 	var err error
 	
@@ -237,7 +283,7 @@ func (ws *WebhookService) connectRabbitMQ() error {
 		return err
 	}
 
-	// Declare exchange
+	// Declare main exchange
 	err = ws.channel.ExchangeDeclare(EXCHANGE_NAME, "direct", true, false, false, false, nil)
 	if err != nil {
 		ws.channel.Close()
@@ -245,14 +291,25 @@ func (ws *WebhookService) connectRabbitMQ() error {
 		return err
 	}
 
-	// Get queue arguments with MESSAGE TTL only
-	queueArgs := getQueueArguments()
+	// Declare DLX (Dead Letter Exchange) if retry is enabled
+	if RETRY_ENABLED {
+		dlxName := getDLXExchangeName()
+		err = ws.channel.ExchangeDeclare(dlxName, "direct", true, false, false, false, nil)
+		if err != nil {
+			ws.channel.Close()
+			ws.conn.Close()
+			return fmt.Errorf("failed to declare DLX exchange %s: %v", dlxName, err)
+		}
+		log.Printf("Declared DLX exchange: %s", dlxName)
+	}
 
-	// Declare queues for each service with message TTL arguments (persistent queues)
+	// Get queue arguments with MESSAGE TTL and DLX
+	queueArgs := getQueueArguments()
+	// Declare queues for each service
 	for _, service := range WEBHOOK_SERVICES {
 		_, routingKey, queueName := getWebhookConfig(service)
 		
-		// Declare queue with message TTL arguments - durable=true, autoDelete=false
+		// Declare main queue with DLX arguments - durable=true, autoDelete=false
 		_, err = ws.channel.QueueDeclare(queueName, true, false, false, false, queueArgs)
 		if err != nil {
 			ws.channel.Close()
@@ -260,12 +317,52 @@ func (ws *WebhookService) connectRabbitMQ() error {
 			return fmt.Errorf("failed to declare queue %s: %v", queueName, err)
 		}
 
-		// Bind queue
+		// Bind main queue to main exchange
 		err = ws.channel.QueueBind(queueName, routingKey, EXCHANGE_NAME, false, nil)
 		if err != nil {
 			ws.channel.Close()
 			ws.conn.Close()
 			return fmt.Errorf("failed to bind queue %s to routing key %s: %v", queueName, routingKey, err)
+		}
+
+		// Declare retry queue and DLQ if retry is enabled
+		if RETRY_ENABLED {
+			dlxName := getDLXExchangeName()
+			
+			// Declare single retry queue with delay
+			retryQueueName := fmt.Sprintf("%s_retry", queueName)
+			retryDelay := RETRY_DELAY // Delay before retry
+			retryArgs := getRetryQueueArguments(retryDelay, routingKey)
+			
+			_, err = ws.channel.QueueDeclare(retryQueueName, true, false, false, false, retryArgs)
+			if err != nil {
+				ws.channel.Close()
+				ws.conn.Close()
+				return fmt.Errorf("failed to declare retry queue %s: %v", retryQueueName, err)
+			}
+			
+			// Bind retry queue to DLX (receives rejected messages from main queue)
+			err = ws.channel.QueueBind(retryQueueName, routingKey, dlxName, false, nil)
+			if err != nil {
+				ws.channel.Close()
+				ws.conn.Close()
+				return fmt.Errorf("failed to bind retry queue %s: %v", retryQueueName, err)
+			}
+			
+			// Declare DLQ (final dead letter queue for manual review)
+			dlqName := fmt.Sprintf("%s_dlq", queueName)
+			dlqArgs := getDLQArguments()
+			
+			_, err = ws.channel.QueueDeclare(dlqName, true, false, false, false, dlqArgs)
+			if err != nil {
+				ws.channel.Close()
+				ws.conn.Close()
+				return fmt.Errorf("failed to declare DLQ %s: %v", dlqName, err)
+			}
+			
+			// Note: DLQ receives messages when retry queue overflows (x-overflow: reject-publish)
+			// DLQ is NOT bound to DLX - it's populated when retry queue rejects due to overflow
+			log.Printf("Declared retry queue: %s (delay: %ds), DLQ: %s", retryQueueName, retryDelay, dlqName)
 		}
 	}
 
@@ -273,9 +370,16 @@ func (ws *WebhookService) connectRabbitMQ() error {
 	log.Printf("Connected to RabbitMQ successfully at %s:%s", RABBITMQ_HOST, RABBITMQ_PORT)
 	log.Printf("Using queue prefix: %s, routing prefix: %s", QUEUE_PREFIX, ROUTING_PREFIX)
 	log.Printf("Message TTL: %d minutes (%d days), Max Queue Length: %d", MESSAGE_TTL_MINUTES, MESSAGE_TTL_MINUTES/1440, MAX_QUEUE_LENGTH)
-	log.Printf("Queues are persistent (no auto-delete)")
+	if RETRY_ENABLED {
+		log.Printf("Retry enabled with %d second delay", RETRY_DELAY)
+		log.Printf("DLX Exchange: %s", getDLXExchangeName())
+	} else {
+		log.Printf("Retry disabled")
+	}
 	return nil
 }
+
+
 
 func (ws *WebhookService) disconnect() {
 	if ws.channel != nil {

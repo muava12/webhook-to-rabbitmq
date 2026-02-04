@@ -1,3 +1,4 @@
+
 # Webhook Service (Gateway & Queue Manager)
 
 **Webhook Service** adalah aplikasi penghubung (middleware) ringan berbasis **Go** yang berfungsi untuk menerima data webhook dari pihak ketiga (seperti WhatsApp gateway) dan meneruskannya ke antrian pesan (**RabbitMQ**) agar dapat diproses secara aman dan teratur oleh service lain.

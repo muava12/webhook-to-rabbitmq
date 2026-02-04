@@ -18,6 +18,9 @@ services:
       - QUEUE_PREFIX=gowa_
       - MESSAGE_TTL_MINUTES=4320 # Default: 3 days = 4320 minutes
       - MAX_QUEUE_LENGTH=50000 # default 50000
+      # Retry Configuration
+      - RETRY_ENABLED=true # Enable retry mechanism with DLX
+      - RETRY_DELAY=60 # Delay before retry in seconds (default: 60 seconds)
       - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
       - TZ=Asia/Jakarta
     networks:

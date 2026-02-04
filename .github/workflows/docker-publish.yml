@@ -28,6 +28,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Notify Deploy Started
+        if: github.event_name != 'pull_request'
+        run: |
+          curl -X POST "https://ntfy.sh/deploy-on-github-xasr6KBz47PjswPf53A78Fib" \
+            -H "Title: 🚀 Deploy Dimulai" \
+            -H "Priority: low" \
+            -H "Tags: rocket,docker" \
+            -d "Repository: ${{ github.repository }}
+          Branch: ${{ github.ref_name }}
+          By: ${{ github.actor }}"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
