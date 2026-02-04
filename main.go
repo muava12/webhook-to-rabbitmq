@@ -466,6 +466,7 @@ func (ws *WebhookService) healthMonitor() {
 	for {
 		if !ws.isConnected {
 			if err := ws.connectRabbitMQ(); err != nil {
+				log.Printf("Failed to connect to RabbitMQ: %v", err)
 				ws.consecutiveFailures++
 				if ws.consecutiveFailures >= 3 && ws.wasConnected {
 					ws.notifyRabbitMQDown()
