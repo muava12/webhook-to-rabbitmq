@@ -24,6 +24,10 @@ services:
       - EXTRA_QUEUES=molagis:2 # Fanout configuration: Create gowa_molagis_2 bound to routing key wa.molagis
       - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
       - TZ=Asia/Jakarta
+      # Disk Buffer Configuration
+      - BUFFER_DIR=/buffer
+    volumes:
+      - ./buffer:/buffer
     networks:
       - cloudflared-net
     restart: unless-stopped

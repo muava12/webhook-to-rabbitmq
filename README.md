@@ -14,11 +14,18 @@ Bayangkan jika ratusan pesan WhatsApp masuk secara bersamaan. Jika aplikasi utam
     *   Jika **RabbitMQ Down**: Service akan otomatis menyimpan data webhook di memori internal (RAM) sementara waktu.
     *   Saat RabbitMQ kembali hidup, data yang tertahan akan otomatis dikirim (flush).
 2.  **Safety Buffer**: Mencegah data hilang ketika server backend sedang sibuk atau mati.
-3.  **Monitoring & Notifikasi**: Terintegrasi dengan **ntfy.sh** untuk mengirim notifikasi jika:
+3.  **Reliable Retry Mechanism** :
+    *   Menggunakan Dead Letter Exchange (DLX) untuk menangani pesan yang gagal diproses.
+    *   Setiap queue memiliki antrian retry terisolasi (tidak bocor ke queue lain).
+    *   Delay retry dapat dikonfigurasi (default 60 detik).
+4.  **Fanout Architecture (One-to-Many)**:
+    *   Mendukung penerusan satu pesan webhook ke **banyak queue** sekaligus (untuk multiple consumers).
+    *   Contoh: Pesan untuk `molagis` bisa masuk ke queue Utama dan queue Analytics secara bersamaan.
+5.  **Monitoring & Notifikasi**: Terintegrasi dengan **ntfy.sh** untuk mengirim notifikasi jika:
     *   Koneksi RabbitMQ terputus/tersambung.
     *   Antrian memori penuh.
     *   Service baru dijalankan.
-4.  **Optimasi Memori**: Dirancang agar ringan dan efisien menggunakan resource server.
+6.  **Optimasi Memori**: Dirancang agar ringan dan efisien menggunakan resource server.
 
 ---
 
@@ -95,6 +102,10 @@ Anda dapat mengubah pengaturan ini melalui file `compose.yml` atau environment v
 | `ROUTING_PREFIX` | `wa` | Prefix untuk routing key (misal: `wa.molagis`). |
 | `MESSAGE_TTL_MINUTES`| `4320` | Masa berlaku pesan di queue (default 3 hari). |
 | `MAX_QUEUE_LENGTH` | `50000` | Maksimal jumlah pesan dalam queue. |
+| `RETRY_ENABLED` | `true` | Mengaktifkan mekanisme retry dengan DLX. |
+| `RETRY_DELAY` | `60` | Delay (dalam detik) sebelum pesan di-retry. |
+| `DLX_EXCHANGE_NAME` | `[EXCHANGE]_dlx` | Nama custom untuk Dead Letter Exchange. |
+| `EXTRA_QUEUES` | `""` | Konfigurasi Fanout. Format: `service:suffix`. Contoh `molagis:2` membuat queue `gowa_molagis_2`. |
 | `NTFY_URL` | *(URL default)* | URL ntfy.sh untuk notifikasi monitoring. |
 
 ---
