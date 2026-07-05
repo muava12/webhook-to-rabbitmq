@@ -13,7 +13,9 @@ interface Config { version: number; rabbitmq: RMQCfg; sources: Source[] }
 type Tab = 'sources' | 'queues' | 'tester' | 'settings'
 
 async function api<T>(url: string, opts?: RequestInit): Promise<T> {
-  const r = await fetch(url, opts); return r.json()
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(r.statusText)
+  return r.json()
 }
 
 function qtype(n: string) { return n.endsWith('_retry') ? 'r' : n.endsWith('_dlq') ? 'd' : 'm' }
