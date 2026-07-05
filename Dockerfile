@@ -11,10 +11,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy the source code
-COPY main.go ./
+COPY *.go ./
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webhook-service main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webhook-service .
 
 # Stage 2: Create a minimal runtime image
 FROM alpine:latest

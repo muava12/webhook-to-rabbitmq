@@ -16,18 +16,22 @@ services:
       - RABBITMQ_VHOST=/
       - EXCHANGE_NAME=gowa
       - QUEUE_PREFIX=gowa_
-      - MESSAGE_TTL_MINUTES=4320 # Default: 3 days = 4320 minutes
-      - MAX_QUEUE_LENGTH=50000 # default 50000
-      # Retry Configuration
-      - RETRY_ENABLED=true # Enable retry mechanism with DLX
-      - RETRY_DELAY=60 # Delay before retry in seconds (default: 60 seconds)
-      - EXTRA_QUEUES=molagis:2 # Fanout configuration: Create gowa_molagis_2 bound to routing key wa.molagis
+      - MESSAGE_TTL_MINUTES=4320
+      - MAX_QUEUE_LENGTH=50000
+      - RETRY_ENABLED=true
+      - RETRY_DELAY=60
       - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
       - TZ=Asia/Jakarta
-      # Disk Buffer Configuration
       - BUFFER_DIR=/buffer
+      # UI Dashboard: RMQ Management API (same host as RMQ)
+      - RMQ_MGMT_URL=http://rabbitmq:15672
+      - RMQ_MGMT_USER=gowa
+      - RMQ_MGMT_PASSWORD=mantab
+      # Config persistence
+      - SAVE_DIR=/data
     volumes:
       - ./buffer:/buffer
+      - ./data:/data
     networks:
       - cloudflared-net
     restart: unless-stopped
