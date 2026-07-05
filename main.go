@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,9 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/streadway/amqp"
 )
+
+//go:embed static/*
+var staticFiles embed.FS
 
 // ===== KONFIGURASI TERPUSAT =====
 var (
@@ -55,14 +59,12 @@ var (
 	MAX_PAYLOAD_SIZE      = 64 * 1024        // 64KB limit per payload
 	NTFY_URL              = getEnv("NTFY_URL", "https://ntfy.sh/monitor-server-30AhxaPwq00MzspW")
 	NTFY_TIMEOUT          = 5 * time.Second // Reduced from 10s
-)
 
-// ===== KONFIGURASI SERVICES (MINIMAL) =====
-var WEBHOOK_SERVICES = []string{
-	"molagis",
-	"muafa",
-	"kurir",
-}
+	// RabbitMQ Management API (for UI dashboard)
+	RMQ_MGMT_URL      = getEnv("RMQ_MGMT_URL", "http://localhost:15672")
+	RMQ_MGMT_USER     = getEnv("RMQ_MGMT_USER", "guest")
+	RMQ_MGMT_PASSWORD = getEnv("RMQ_MGMT_PASSWORD", "guest")
+)
 
 // ===== STRUCTS (OPTIMIZED) =====
 type WebhookService struct {
@@ -75,6 +77,7 @@ type WebhookService struct {
 	lastNotifyTime      map[string]int64  // Use int64 instead of time.Time
 	notifyMutex         sync.RWMutex
 	consecutiveFailures uint8             // Use uint8 instead of int
+	config              *ConfigManager
 }
 
 type PayloadItem struct {
@@ -125,34 +128,24 @@ func getDLXExchangeName() string {
 }
 
 // Parse extra queues config: "molagis:2,other:3" -> map["molagis"][]string{"2"}
-func getExtraQueuesMap() map[string][]string {
-	config := map[string][]string{}
-	if EXTRA_QUEUES_CONFIG == "" {
-		return config
-	}
-
-	pairs := strings.Split(EXTRA_QUEUES_CONFIG, ",")
-	for _, p := range pairs {
-		parts := strings.Split(p, ":")
-		if len(parts) == 2 {
-			service := strings.TrimSpace(parts[0])
-			suffix := strings.TrimSpace(parts[1])
-			config[service] = append(config[service], suffix)
-		}
-	}
-	return config
-}
-
 func getRabbitMQURL() string {
 	return fmt.Sprintf("amqp://%s:%s@%s:%s%s",
 		RABBITMQ_USER, RABBITMQ_PASSWORD, RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_VHOST)
 }
 
-// Optimized route generation with configurable prefixes
-func getWebhookConfig(service string) (string, string, string) {
-	return fmt.Sprintf("/webhook/%s", service),
-		fmt.Sprintf("%s.%s", ROUTING_PREFIX, service),
-		fmt.Sprintf("%s%s", QUEUE_PREFIX, service)
+func getRMQURL(cfg RMQConfig) string {
+	h, p, u, pw, v := cfg.Host, cfg.Port, cfg.User, cfg.Password, cfg.VHost
+	if h == "" { h = RABBITMQ_HOST }
+	if p == "" { p = RABBITMQ_PORT }
+	if u == "" { u = RABBITMQ_USER }
+	if pw == "" { pw = RABBITMQ_PASSWORD }
+	if v == "" { v = RABBITMQ_VHOST }
+	return fmt.Sprintf("amqp://%s:%s@%s:%s%s", u, pw, h, p, v)
+}
+
+func getExchange(cfg RMQConfig) string {
+	if cfg.Exchange != "" { return cfg.Exchange }
+	return EXCHANGE_NAME
 }
 
 // Get queue arguments with MESSAGE TTL and DLX (Dead Letter Exchange)
@@ -207,7 +200,7 @@ func getMessageTTLMs() int32 {
 	return int32(MESSAGE_TTL_MINUTES * 60 * 1000)
 }
 
-func NewWebhookService() *WebhookService {
+func NewWebhookService(cfg *ConfigManager) *WebhookService {
 	// Create buffer directory if it doesn't exist
 	if err := os.MkdirAll(BUFFER_DIR, 0755); err != nil {
 		log.Fatalf("Failed to create buffer directory %s: %v", BUFFER_DIR, err)
@@ -217,6 +210,7 @@ func NewWebhookService() *WebhookService {
 		lastNotifyTime:      make(map[string]int64, 4), // Pre-allocate for 4 types
 		wasConnected:        false,
 		consecutiveFailures: 0,
+		config:              cfg,
 	}
 
 	go service.healthMonitor()
@@ -293,8 +287,13 @@ func (ws *WebhookService) notifyServiceStarted() {
 func (ws *WebhookService) connectRabbitMQ() error {
 	var err error
 
+	// Use config RMQ if available, fall back to env vars
+	rmqCfg := ws.config.GetRMQ()
+	rmqURL := getRMQURL(rmqCfg)
+	exchange := getExchange(rmqCfg)
+
 	// Connect to RabbitMQ
-	ws.conn, err = amqp.Dial(getRabbitMQURL())
+	ws.conn, err = amqp.Dial(rmqURL)
 	if err != nil {
 		return err
 	}
@@ -307,7 +306,7 @@ func (ws *WebhookService) connectRabbitMQ() error {
 	}
 
 	// Declare main exchange
-	err = ws.channel.ExchangeDeclare(EXCHANGE_NAME, "direct", true, false, false, false, nil)
+	err = ws.channel.ExchangeDeclare(exchange, "direct", true, false, false, false, nil)
 	if err != nil {
 		ws.channel.Close()
 		ws.conn.Close()
@@ -316,7 +315,7 @@ func (ws *WebhookService) connectRabbitMQ() error {
 
 	// Declare DLX (Dead Letter Exchange) if retry is enabled
 	if RETRY_ENABLED {
-		dlxName := getDLXExchangeName()
+		dlxName := exchange + "_dlx"
 		err = ws.channel.ExchangeDeclare(dlxName, "direct", true, false, false, false, nil)
 		if err != nil {
 			ws.channel.Close()
@@ -326,37 +325,22 @@ func (ws *WebhookService) connectRabbitMQ() error {
 		log.Printf("Declared DLX exchange: %s", dlxName)
 	}
 
-	// Get extra queues configuration
-	extraQueuesMap := getExtraQueuesMap()
-
-	// Declare queues for each service
-	for _, service := range WEBHOOK_SERVICES {
-		_, routingKey, queueName := getWebhookConfig(service)
-
-		// 1. Declare MAIN Service Queue
-		// Unique return key for main queue: routingKey + ".main"
-		// DLX routing key for main queue: routingKey + ".dlx.main"
-		mainReturnKey := routingKey + ".main"
-		mainDlxKey := routingKey + ".dlx.main"
-
-		if err := ws.declareQueueSet(service, queueName, routingKey, mainReturnKey, mainDlxKey); err != nil {
-			return err
-		}
-
-		// 2. Declare EXTRA Queues (if any)
-		if suffixes, ok := extraQueuesMap[service]; ok {
-			for _, suffix := range suffixes {
-				extraQueueName := fmt.Sprintf("%s_%s", queueName, suffix)
-				// Shared routing key remains the same (routingKey) -> fanout behavior
-				// Unique keys for this specific queue:
-				extraReturnKey := fmt.Sprintf("%s.%s", routingKey, suffix)
-				extraDlxKey := fmt.Sprintf("%s.dlx.%s", routingKey, suffix)
-
-				log.Printf("Setting up extra queue: %s (suffix: %s) for service: %s", extraQueueName, suffix, service)
-				if err := ws.declareQueueSet(service, extraQueueName, routingKey, extraReturnKey, extraDlxKey); err != nil {
-					return err
-				}
+	// Declare queues from config sources
+	cfg := ws.config.GetConfig()
+	declared := make(map[string]bool)
+	for _, src := range cfg.Sources {
+		for _, route := range src.Routes {
+			key := route.Exchange + ":" + route.RoutingKey
+			if declared[key] {
+				continue
 			}
+			declared[key] = true
+			// Ensure exchange exists
+			err := ws.channel.ExchangeDeclare(route.Exchange, "direct", true, false, false, false, nil)
+			if err != nil {
+				log.Printf("Warn: cannot declare exchange %s: %v", route.Exchange, err)
+			}
+			log.Printf("Ensured exchange: %s for routing key: %s", route.Exchange, route.RoutingKey)
 		}
 	}
 
@@ -370,9 +354,6 @@ func (ws *WebhookService) connectRabbitMQ() error {
 	if RETRY_ENABLED {
 		log.Printf("Retry enabled with %d second delay", RETRY_DELAY)
 		log.Printf("DLX Exchange: %s", getDLXExchangeName())
-		if EXTRA_QUEUES_CONFIG != "" {
-			log.Printf("Extra queues configured: %s", EXTRA_QUEUES_CONFIG)
-		}
 	} else {
 		log.Printf("Retry disabled")
 	}
@@ -642,55 +623,119 @@ func (ws *WebhookService) getBufferedFileCount() int {
 }
 
 // ===== WEBHOOK HANDLERS (OPTIMIZED) =====
-func (ws *WebhookService) handleWebhook(w http.ResponseWriter, r *http.Request, routingKey, webhookType string) {
+
+// matchDevice checks if payload field matches a route filter
+func matchDevice(payload map[string]interface{}, field, filter string) bool {
+	if filter == "*" {
+		return true
+	}
+	val, ok := payload[field].(string)
+	if !ok {
+		v, ok := payload[field].(float64)
+		if !ok {
+			// Try nested field with dot notation
+			parts := strings.SplitN(field, ".", 2)
+			if len(parts) == 2 {
+				if inner, ok := payload[parts[0]].(map[string]interface{}); ok {
+					return matchDevice(inner, parts[1], filter)
+				}
+			}
+			return filter == "*"
+		}
+		val = fmt.Sprintf("%.0f", v)
+	}
+	if strings.HasSuffix(filter, "*") && len(filter) > 1 {
+		prefix := filter[:len(filter)-1]
+		return strings.HasPrefix(val, prefix)
+	}
+	return val == filter
+}
+
+func (ws *WebhookService) handleWebhook(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	name := vars["name"]
+	log.Printf("Incoming webhook for: %s", name)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Limit request body size
+	// Limit & read body
 	r.Body = http.MaxBytesReader(w, r.Body, int64(MAX_PAYLOAD_SIZE))
-
-	// Read body with size limit
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
 	r.Body.Close()
-
 	if len(data) == 0 {
 		http.Error(w, "Empty request body", http.StatusBadRequest)
 		return
 	}
-
-	// Minimal JSON validation
 	if data[0] != '{' && data[0] != '[' {
 		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
 		return
 	}
 
-	// Publish message
-	err = ws.publishMessage(routingKey, data)
-	if err != nil {
-		log.Printf("Webhook %s publishing error: %v", webhookType, err)
+	// Find source by path
+	path := "/webhook/" + name
+	source := ws.config.GetSourceByPath(path)
+	if source == nil || len(source.Routes) == 0 {
+		// Forward to default routing key (backward compat)
+		rk := ROUTING_PREFIX + "." + name
+		ws.publishMessage(rk, data)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "routing_key": rk})
+		return
 	}
 
-	// Minimal success response
+	// Parse payload for device matching
+	var payload map[string]interface{}
+	json.Unmarshal(data, &payload)
+
+	matched := 0
+	for _, route := range source.Routes {
+		if !route.Enabled {
+			continue
+		}
+		if !matchDevice(payload, route.FilterField, route.DeviceFilter) {
+			continue
+		}
+		err := ws.publishMessage(route.RoutingKey, data)
+		if err != nil {
+			log.Printf("Failed to route to %s: %v", route.RoutingKey, err)
+		} else {
+			matched++
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"success"}`))
+	if matched == 0 {
+		// No route matched, forward to default
+		rk := ROUTING_PREFIX + "." + name
+		ws.publishMessage(rk, data)
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "routing_key": rk, "matched": 0})
+	} else {
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "matched": matched})
+	}
 }
 
 // Health check endpoint with TTL info in minutes and days
 func (ws *WebhookService) healthCheck(w http.ResponseWriter, r *http.Request) {
-	// Generate route info for health check
-	routes := make(map[string]map[string]string)
-	for _, service := range WEBHOOK_SERVICES {
-		path, routingKey, queueName := getWebhookConfig(service)
-		routes[service] = map[string]string{
-			"path":        path,
-			"routing_key": routingKey,
-			"queue_name":  queueName,
+	cfg := ws.config.GetConfig()
+	routes := make(map[string]map[string]interface{})
+	for _, src := range cfg.Sources {
+		routeList := make([]map[string]string, 0)
+		for _, rt := range src.Routes {
+			routeList = append(routeList, map[string]string{
+				"routing_key": rt.RoutingKey,
+				"device_filter": rt.DeviceFilter,
+			})
+		}
+		routes[src.Name] = map[string]interface{}{
+			"path":   src.Path,
+			"routes": routeList,
 		}
 	}
 	
@@ -720,6 +765,44 @@ func (ws *WebhookService) healthCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+// Queue status proxy from RabbitMQ Management API
+func (ws *WebhookService) queueStatus(w http.ResponseWriter, r *http.Request) {
+	url := fmt.Sprintf("%s/api/queues", RMQ_MGMT_URL)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	req.SetBasicAuth(RMQ_MGMT_USER, RMQ_MGMT_PASSWORD)
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, `{"error":"cannot reach RabbitMQ management API"}`, http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	var queues []interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&queues); err != nil {
+		http.Error(w, `{"error":"invalid response"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Filter only queues matching our prefix
+	var filtered []interface{}
+	for _, q := range queues {
+		qm := q.(map[string]interface{})
+		name, _ := qm["name"].(string)
+		if strings.HasPrefix(name, QUEUE_PREFIX) {
+			filtered = append(filtered, q)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(filtered)
+}
+
 // Test notification (minimal)
 func (ws *WebhookService) testNotification(w http.ResponseWriter, r *http.Request) {
 	ws.sendNotification(SimpleNotify{
@@ -732,9 +815,109 @@ func (ws *WebhookService) testNotification(w http.ResponseWriter, r *http.Reques
 	w.Write([]byte(`{"status":"success"}`))
 }
 
+// ===== CONFIG API HANDLERS =====
+func (ws *WebhookService) getConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ws.config.GetConfig())
+}
+
+func (ws *WebhookService) createSource(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name      string `json:"name"`
+		Path      string `json:"path"`
+		AuthToken string `json:"auth_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Name == "" {
+		http.Error(w, `{"error":"name required"}`, http.StatusBadRequest)
+		return
+	}
+	path := body.Path
+	if path == "" {
+		path = "/webhook/" + body.Name
+	}
+	s, err := ws.config.UpsertSource(body.Name, path, body.AuthToken)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s)
+}
+
+func (ws *WebhookService) deleteSource(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if ws.config.DeleteSource(vars["id"]) {
+		w.Write([]byte(`{"status":"deleted"}`))
+	} else {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	}
+}
+
+func (ws *WebhookService) createRoute(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SourceID     string `json:"source_id"`
+		Exchange     string `json:"exchange"`
+		RoutingKey   string `json:"routing_key"`
+		QueuePrefix  string `json:"queue_prefix"`
+		DeviceFilter string `json:"device_filter"`
+		FilterField  string `json:"filter_field"`
+		Enabled      bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	if body.FilterField == "" {
+		body.FilterField = "device_id"
+	}
+	if body.Exchange == "" {
+		body.Exchange = EXCHANGE_NAME
+	}
+	route, err := ws.config.UpsertRoute(body.SourceID, body.Exchange,
+		body.RoutingKey, body.QueuePrefix, body.DeviceFilter, body.FilterField, body.Enabled, 0)
+	if err != nil {
+		http.Error(w, `{"error":"source not found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(route)
+}
+
+func (ws *WebhookService) deleteRoute(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	if ws.config.DeleteRoute(vars["id"]) {
+		w.Write([]byte(`{"status":"deleted"}`))
+	} else {
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	}
+}
+
+func (ws *WebhookService) updateRMQConfig(w http.ResponseWriter, r *http.Request) {
+	var rmq RMQConfig
+	if err := json.NewDecoder(r.Body).Decode(&rmq); err != nil {
+		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	ws.config.UpdateRMQ(rmq)
+	// Trigger reconnect
+	ws.mutex.Lock()
+	ws.isConnected = false
+	ws.mutex.Unlock()
+	if ws.conn != nil {
+		ws.conn.Close()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status":"updated"})
+}
+
 func main() {
-	// Initialize webhook service
-	webhookService := NewWebhookService()
+	// Initialize config & webhook service
+	cfg := NewConfigManager()
+	webhookService := NewWebhookService(cfg)
 	defer webhookService.disconnect()
 
 	// Send startup notification
@@ -743,24 +926,24 @@ func main() {
 	// Setup routes
 	r := mux.NewRouter()
 
-	// Register webhook endpoints
-	for _, service := range WEBHOOK_SERVICES {
-		path, routingKey, queueName := getWebhookConfig(service)
+	// Dynamic webhook endpoint: /webhook/{name}
+	r.HandleFunc("/webhook/{name}", webhookService.handleWebhook).Methods("POST")
 
-		// Capture variables for closure
-		rKey := routingKey
-		svcName := service
-
-		r.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
-			webhookService.handleWebhook(w, r, rKey, svcName)
-		}).Methods("POST")
-
-		log.Printf("Registered webhook: %s -> %s -> %s", path, routingKey, queueName)
-	}
+	// Config API
+	r.HandleFunc("/api/config", webhookService.getConfig).Methods("GET")
+	r.HandleFunc("/api/sources", webhookService.createSource).Methods("POST")
+	r.HandleFunc("/api/sources/{id}", webhookService.deleteSource).Methods("DELETE")
+	r.HandleFunc("/api/routes", webhookService.createRoute).Methods("POST")
+	r.HandleFunc("/api/routes/{id}", webhookService.deleteRoute).Methods("DELETE")
+	r.HandleFunc("/api/rmq", webhookService.updateRMQConfig).Methods("PUT")
 
 	// Utility endpoints
 	r.HandleFunc("/health", webhookService.healthCheck).Methods("GET")
+	r.HandleFunc("/api/queues", webhookService.queueStatus).Methods("GET")
 	r.HandleFunc("/test-notification", webhookService.testNotification).Methods("GET")
+
+	// Static file server for UI (catch-all, must be last)
+	r.PathPrefix("/").Handler(http.FileServer(http.FS(staticFiles)))
 
 	// Start server
 	listenAddr := fmt.Sprintf(":%s", WEBHOOK_PORT)
