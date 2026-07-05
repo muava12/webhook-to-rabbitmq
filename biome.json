@@ -1,0 +1,24 @@
+{
+	"linter": {
+		"rules": {
+			"style": {
+				"useTemplate": "off",
+				"noDescendingSpecificity": "off"
+			},
+			"a11y": {
+				"noStaticElementInteractions": "off",
+				"useKeyWithClickEvents": "off",
+				"noLabelWithoutControl": "off",
+				"noAutofocus": "off",
+				"useButtonType": "off"
+			},
+			"correctness": {
+				"noUnusedFunctionParameters": "off",
+				"noUnusedVariables": "off"
+			},
+			"complexity": {
+				"useLiteralKeys": "off"
+			}
+		}
+	}
+}

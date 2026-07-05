@@ -1006,6 +1006,64 @@ func (ws *WebhookService) updateRMQConfig(w http.ResponseWriter, r *http.Request
 	writeOK(w, "updated")
 }
 
+func (ws *WebhookService) getEnvConfig(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ws.config.GetEnvConfig())
+}
+
+func (ws *WebhookService) updateEnvConfig(w http.ResponseWriter, r *http.Request) {
+	var env EnvParams
+	if err := json.NewDecoder(r.Body).Decode(&env); err != nil {
+		writeErr(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if err := ws.config.UpdateEnvConfig(env); err != nil {
+		writeErr(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeOK(w, "updated")
+}
+
+func (ws *WebhookService) revertEnvConfig(w http.ResponseWriter, r *http.Request) {
+	if err := ws.config.RevertEnv(); err != nil {
+		writeErr(w, "revert failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeOK(w, "reverted")
+}
+
+func (ws *WebhookService) getRoutingConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := ws.config.GetConfig()
+	type routeInfo struct {
+		SourceID     string `json:"source_id"`
+		SourceName   string `json:"source_name"`
+		SourcePath   string `json:"source_path"`
+		FilterField  string `json:"filter_field"`
+		DeviceFilter string `json:"device_filter"`
+		RoutingKey   string `json:"routing_key"`
+		Exchange     string `json:"exchange"`
+		Enabled      bool   `json:"enabled"`
+	}
+	var routes []routeInfo
+	for _, src := range cfg.Sources {
+		for _, r := range src.Routes {
+			routes = append(routes, routeInfo{
+				SourceID: src.ID, SourceName: src.Name, SourcePath: src.Path,
+				FilterField: r.FilterField, DeviceFilter: r.DeviceFilter,
+				RoutingKey: r.RoutingKey, Exchange: r.Exchange, Enabled: r.Enabled,
+			})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"routes":      routes,
+		"source_count": len(cfg.Sources),
+		"route_count":  len(routes),
+		"prefix":       QUEUE_PREFIX,
+		"routing_prefix": ROUTING_PREFIX,
+	})
+}
+
 func main() {
 	// Initialize config & webhook service
 	cfg := NewConfigManager()
@@ -1029,6 +1087,14 @@ func main() {
 	r.HandleFunc("/api/routes/{id}", webhookService.deleteRoute).Methods("DELETE")
 	r.HandleFunc("/api/rmq", webhookService.getRMQConfig).Methods("GET")
 	r.HandleFunc("/api/rmq", webhookService.updateRMQConfig).Methods("PUT")
+
+	// Env config
+	r.HandleFunc("/api/env", webhookService.getEnvConfig).Methods("GET")
+	r.HandleFunc("/api/env", webhookService.updateEnvConfig).Methods("PUT")
+	r.HandleFunc("/api/env/revert", webhookService.revertEnvConfig).Methods("POST")
+
+	// Routing config
+	r.HandleFunc("/api/routing", webhookService.getRoutingConfig).Methods("GET")
 
 	// Utility endpoints
 	r.HandleFunc("/health", webhookService.healthCheck).Methods("GET")
