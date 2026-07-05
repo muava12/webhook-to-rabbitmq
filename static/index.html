@@ -112,12 +112,22 @@ tr:hover td{background:var(--surface2)}
 
     <!-- Tab: Sources -->
     <div id="tabSources">
-      <div class="section"><h3>Webhook Sources</h3><button class="btn btn-sm" id="btnAddSource">+ New</button></div>
+      <div class="section"><h3>Webhook Sources</h3><button class="btn btn-sm" id="btnAddSource">+ New Source</button></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+        Each source is an HTTP endpoint that receives webhooks. 
+        Routes define how to distribute messages based on device field.
+      </div>
       <div id="addSourceForm" style="display:none" class="af">
-        <input class="in in-m" id="newSrcName" placeholder="name (e.g. myapp)" style="width:180px">
-        <input class="in in-m" id="newSrcPath" placeholder="/webhook/myapp" style="width:250px">
-        <button class="btn btn-sm" id="btnCreateSrc">Create</button>
-        <button class="btn btn-sm btno" id="btnCancelSrc">Cancel</button>
+        <div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Source name</div>
+          <input class="in in-m" id="newSrcName" placeholder="e.g. myapp" style="width:180px">
+        </div>
+        <div>
+          <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Webhook path</div>
+          <input class="in in-m" id="newSrcPath" placeholder="/webhook/myapp" style="width:250px">
+        </div>
+        <button class="btn btn-sm" id="btnCreateSrc" style="margin-top:12px">Create</button>
+        <button class="btn btn-sm btno" id="btnCancelSrc" style="margin-top:12px">Cancel</button>
       </div>
       <div id="sourceList"></div>
     </div>
@@ -151,16 +161,44 @@ tr:hover td{background:var(--surface2)}
     <!-- Tab: Settings -->
     <div id="tabSettings" style="display:none">
       <div class="section"><h3>RabbitMQ Connection</h3></div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
+        Settings below override environment variables. Leave empty to use env defaults.
+        Saving will disconnect and reconnect automatically.
+      </div>
       <div class="settings-box">
-        <div class="field"><label>Host</label><input class="in in-m" id="rmqHost" placeholder="localhost"></div>
-        <div class="field"><label>Port</label><input class="in in-m" id="rmqPort" placeholder="5672"></div>
-        <div class="field"><label>User</label><input class="in in-m" id="rmqUser" placeholder="guest"></div>
-        <div class="field"><label>Password</label><input class="in in-m" id="rmqPass" type="password" placeholder="••••••"></div>
-        <div class="field"><label>VHost</label><input class="in in-m" id="rmqVhost" placeholder="/"></div>
-        <div class="field"><label>Exchange</label><input class="in in-m" id="rmqExchange" placeholder="gowa"></div>
-        <div style="margin-top:16px;display:flex;gap:8px">
+        <div class="field">
+          <label>Host</label>
+          <input class="in in-m" id="rmqHost" placeholder="e.g. 100.100.50.102 or rabbitmq">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ server hostname or IP address</div>
+        </div>
+        <div class="field">
+          <label>Port</label>
+          <input class="in in-m" id="rmqPort" placeholder="5672">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">AMQP port (default: 5672)</div>
+        </div>
+        <div class="field">
+          <label>User</label>
+          <input class="in in-m" id="rmqUser" placeholder="guest">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ username</div>
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input class="in in-m" id="rmqPass" type="password" placeholder="Enter password">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ password</div>
+        </div>
+        <div class="field">
+          <label>VHost</label>
+          <input class="in in-m" id="rmqVhost" placeholder="/">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Virtual host (default: /)</div>
+        </div>
+        <div class="field">
+          <label>Exchange</label>
+          <input class="in in-m" id="rmqExchange" placeholder="gowa">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Default exchange name for webhook routing</div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
           <button class="btn" id="btnSaveRMQ">Save & Reconnect</button>
-          <span id="rmqStatus" style="font-size:12px;color:var(--muted);align-self:center"></span>
+          <span id="rmqStatus" style="font-size:12px;color:var(--muted)"></span>
         </div>
       </div>
     </div>
@@ -187,7 +225,13 @@ async function load(){
   }catch(e){health={rabbitmq:false,queued:0}}
   try{config=await fj(API+'/api/config')}catch(e){}
   try{queues=await fj(API+'/api/queues')}catch(e){}
-  renderSources();renderQueues();renderSettings();
+  renderSources();renderQueues();
+  // Fetch RMQ config for settings prefill (background)
+  try{ const r = await fetch(API+'/api/rmq'); const rc = await r.json();
+    Object.assign(rc, {host:rc.host||'',port:rc.port||'',user:rc.user||'',password:rc.password||'',vhost:rc.vhost||'',exchange:rc.exchange||''});
+    $('rmqHost').value=rc.host;$('rmqPort').value=rc.port;$('rmqUser').value=rc.user;
+    $('rmqPass').value=rc.password;$('rmqVhost').value=rc.vhost;$('rmqExchange').value=rc.exchange;
+  }catch(e){}
 }
 
 // Tabs
@@ -219,12 +263,25 @@ function renderSources(){
         </div>
       </div>
       <div class="sb-body" id="sb${i}">
+        <div style="font-size:11px;color:var(--muted);margin:12px 0 8px;padding:8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
+          Routes: when <strong>device filter</strong> matches the payload field, message is sent to <strong>routing key</strong>.
+          Use <code>*</code> for catch-all, <code>abc</code> for exact match, <code>s23*</code> for prefix match.
+        </div>
         <div id="routes${i}"></div>
         <div class="af" style="margin-top:8px">
-          <input class="in in-m" id="rf${i}" placeholder='device filter (e.g. "*", "s23*", "abc")' style="width:160px">
-          <input class="in in-m" id="rk${i}" placeholder='routing key (e.g. "wa.abc")' style="width:180px">
-          <input class="in in-m" id="rfd${i}" placeholder='field' style="width:100px" value="device_id">
-          <button class="btn btn-sm" data-si="${s.id}" data-idx="${i}" data-act="ar">+ Route</button>
+          <div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Device filter</div>
+            <input class="in in-m" id="rf${i}" placeholder='"*", "s23*", or "abc"' style="width:140px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Routing key</div>
+            <input class="in in-m" id="rk${i}" placeholder='e.g. wa.abc' style="width:160px">
+          </div>
+          <div>
+            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Filter field</div>
+            <input class="in in-m" id="rfd${i}" placeholder='device_id' style="width:100px" value="device_id">
+          </div>
+          <button class="btn btn-sm" data-si="${s.id}" data-idx="${i}" data-act="ar" style="margin-top:12px">+ Add Route</button>
         </div>
       </div>`;
     list.appendChild(card);
@@ -300,10 +357,7 @@ $('tSend').onclick=async()=>{
 
 // ---- Settings ----
 function renderSettings(){
-  const c=config.rabbitmq||{};
-  $('rmqHost').value=c.host||'';$('rmqPort').value=c.port||'';
-  $('rmqUser').value=c.user||'';$('rmqPass').value=c.password||'';
-  $('rmqVhost').value=c.vhost||'';$('rmqExchange').value=c.exchange||'';
+  // Already prefilled in load() from /api/rmq
 }
 $('btnSaveRMQ').onclick=async()=>{
   const $s=$('rmqStatus');$s.textContent='saving…';

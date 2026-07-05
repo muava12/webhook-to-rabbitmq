@@ -897,6 +897,19 @@ func (ws *WebhookService) deleteRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (ws *WebhookService) getRMQConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := ws.config.GetRMQ()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"host":     cfg.Host,
+		"port":     cfg.Port,
+		"user":     cfg.User,
+		"password": cfg.Password,
+		"vhost":    cfg.VHost,
+		"exchange": cfg.Exchange,
+	})
+}
+
 func (ws *WebhookService) updateRMQConfig(w http.ResponseWriter, r *http.Request) {
 	var rmq RMQConfig
 	if err := json.NewDecoder(r.Body).Decode(&rmq); err != nil {
@@ -936,6 +949,7 @@ func main() {
 	r.HandleFunc("/api/sources/{id}", webhookService.deleteSource).Methods("DELETE")
 	r.HandleFunc("/api/routes", webhookService.createRoute).Methods("POST")
 	r.HandleFunc("/api/routes/{id}", webhookService.deleteRoute).Methods("DELETE")
+	r.HandleFunc("/api/rmq", webhookService.getRMQConfig).Methods("GET")
 	r.HandleFunc("/api/rmq", webhookService.updateRMQConfig).Methods("PUT")
 
 	// Utility endpoints
