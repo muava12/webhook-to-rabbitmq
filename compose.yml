@@ -25,7 +25,7 @@ services:
       - BUFFER_DIR=/buffer
       # UI Dashboard: RMQ Management API (same host as RMQ)
       - RMQ_MGMT_URL=http://rabbitmq:15672
-      - RMQ_MGMT_USER=gowa
+      - RMQ_MGMT_USER=n8n
       - RMQ_MGMT_PASSWORD=mantab
       # Config persistence
       - SAVE_DIR=/data

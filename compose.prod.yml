@@ -14,6 +14,9 @@ services:
       - EXCHANGE_NAME=gowa
       - BUFFER_DIR=/buffer
       - SAVE_DIR=/data
+      - RMQ_MGMT_URL=http://rabbitmq:15672
+      - RMQ_MGMT_USER=n8n
+      - RMQ_MGMT_PASSWORD=mantab
       - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
       - TZ=Asia/Jakarta
     volumes:
