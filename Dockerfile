@@ -10,8 +10,9 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
-# Copy the source code
+# Copy the source code and static files (for embed)
 COPY *.go ./
+COPY static/ ./static/
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o webhook-service .
