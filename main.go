@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -943,7 +944,8 @@ func main() {
 	r.HandleFunc("/test-notification", webhookService.testNotification).Methods("GET")
 
 	// Static file server for UI (catch-all, must be last)
-	r.PathPrefix("/").Handler(http.FileServer(http.FS(staticFiles)))
+	staticFS, _ := fs.Sub(staticFiles, "static")
+	r.PathPrefix("/").Handler(http.FileServer(http.FS(staticFS)))
 
 	// Start server
 	listenAddr := fmt.Sprintf(":%s", WEBHOOK_PORT)
