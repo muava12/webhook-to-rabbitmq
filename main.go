@@ -22,7 +22,7 @@ import (
 	"github.com/streadway/amqp"
 )
 
-//go:embed static/*
+//go:embed static/* static/**/*
 var staticFiles embed.FS
 
 // ===== KONFIGURASI TERPUSAT =====
