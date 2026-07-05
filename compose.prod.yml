@@ -1,0 +1,28 @@
+services:
+  webhook:
+    image: ghcr.io/muava12/webhook-to-rabbitmq:latest
+    container_name: webhook-service
+    ports:
+      - 8001:8001
+    environment:
+      - WEBHOOK_PORT=8001
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=gowa
+      - RABBITMQ_PASSWORD=mantab
+      - RABBITMQ_VHOST=/
+      - EXCHANGE_NAME=gowa
+      - BUFFER_DIR=/buffer
+      - SAVE_DIR=/data
+      - NTFY_URL=https://ntfy.sh/monitor-server-30AhxaPwq00MzspW
+      - TZ=Asia/Jakarta
+    volumes:
+      - ./buffer:/buffer
+      - ./data:/data
+    networks:
+      - cloudflared-net
+    restart: unless-stopped
+
+networks:
+  cloudflared-net:
+    external: true
