@@ -90,7 +90,7 @@ export default function App() {
             <span>⚙️</span><span>Settings</span>
           </div>
         </nav>
-        <div className="footer">v0.2.1</div>
+        <div className="footer">v0.3.0</div>
       </aside>
 
       <main className="main">
