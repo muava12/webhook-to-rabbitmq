@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -88,22 +89,19 @@ func (cm *ConfigManager) load() {
 	log.Printf("Loaded config with %d sources", len(cm.config.Sources))
 }
 
-func (cm *ConfigManager) save() {
+func (cm *ConfigManager) save() error {
 	data, err := json.MarshalIndent(cm.config, "", "  ")
 	if err != nil {
-		log.Printf("Failed to marshal config: %v", err)
-		return
+		return fmt.Errorf("marshal config: %w", err)
 	}
-	// Atomic write: write to .tmp then rename
 	tmp := cm.path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		log.Printf("Failed to write config: %v", err)
-		return
+		return fmt.Errorf("write config: %w", err)
 	}
 	if err := os.Rename(tmp, cm.path); err != nil {
-		log.Printf("Failed to atomically save config: %v", err)
-		return
+		return fmt.Errorf("atomic rename: %w", err)
 	}
+	return nil
 }
 
 // READ
@@ -144,15 +142,15 @@ func (cm *ConfigManager) UpsertSource(name, path, authToken string) (Source, err
 
 	for i := range cm.config.Sources {
 		if cm.config.Sources[i].Name == name {
-			// Update existing
 			cm.config.Sources[i].Path = path
 			cm.config.Sources[i].AuthToken = authToken
-			cm.save()
+			if err := cm.save(); err != nil {
+				return Source{}, err
+			}
 			return cm.config.Sources[i], nil
 		}
 	}
 
-	// Create new
 	s := Source{
 		ID:        uuid.New().String()[:8],
 		Name:      name,
@@ -162,21 +160,22 @@ func (cm *ConfigManager) UpsertSource(name, path, authToken string) (Source, err
 		CreatedAt: time.Now().Unix(),
 	}
 	cm.config.Sources = append(cm.config.Sources, s)
-	cm.save()
+	if err := cm.save(); err != nil {
+		return Source{}, err
+	}
 	return s, nil
 }
 
-func (cm *ConfigManager) DeleteSource(id string) bool {
+func (cm *ConfigManager) DeleteSource(id string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	for i := range cm.config.Sources {
 		if cm.config.Sources[i].ID == id {
 			cm.config.Sources = append(cm.config.Sources[:i], cm.config.Sources[i+1:]...)
-			cm.save()
-			return true
+			return cm.save()
 		}
 	}
-	return false
+	return fmt.Errorf("source %s not found", id)
 }
 
 func (cm *ConfigManager) GetRMQ() RMQConfig {
@@ -194,20 +193,22 @@ func applyRMQToGlobals(rmq RMQConfig) {
 	if rmq.Exchange != "" { EXCHANGE_NAME = rmq.Exchange }
 }
 
-func (cm *ConfigManager) UpdateRMQ(rmq RMQConfig) {
+func (cm *ConfigManager) UpdateRMQ(rmq RMQConfig) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	cm.config.RMQ = rmq
 	applyRMQToGlobals(rmq)
-	cm.save()
+	if err := cm.save(); err != nil {
+		return err
+	}
 	log.Printf("RMQ config updated: %s:%s exchange=%s", rmq.Host, rmq.Port, rmq.Exchange)
+	return nil
 }
 
 func (cm *ConfigManager) UpsertRoute(sourceID, exchange, routingKey, queuePrefix, deviceFilter, filterField string, enabled bool, priority int) (Route, error) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
-	// Find source
 	idx := -1
 	for i := range cm.config.Sources {
 		if cm.config.Sources[i].ID == sourceID {
@@ -216,10 +217,9 @@ func (cm *ConfigManager) UpsertRoute(sourceID, exchange, routingKey, queuePrefix
 		}
 	}
 	if idx == -1 {
-		return Route{}, nil
+		return Route{}, fmt.Errorf("source %s not found", sourceID)
 	}
 
-	// Create new route
 	r := Route{
 		ID:           uuid.New().String()[:8],
 		SourceID:     sourceID,
@@ -233,11 +233,13 @@ func (cm *ConfigManager) UpsertRoute(sourceID, exchange, routingKey, queuePrefix
 		CreatedAt:    time.Now().Unix(),
 	}
 	cm.config.Sources[idx].Routes = append(cm.config.Sources[idx].Routes, r)
-	cm.save()
+	if err := cm.save(); err != nil {
+		return Route{}, err
+	}
 	return r, nil
 }
 
-func (cm *ConfigManager) DeleteRoute(routeID string) bool {
+func (cm *ConfigManager) DeleteRoute(routeID string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	for i := range cm.config.Sources {
@@ -247,10 +249,9 @@ func (cm *ConfigManager) DeleteRoute(routeID string) bool {
 					cm.config.Sources[i].Routes[:j],
 					cm.config.Sources[i].Routes[j+1:]...,
 				)
-				cm.save()
-				return true
+				return cm.save()
 			}
 		}
 	}
-	return false
+	return fmt.Errorf("route %s not found", routeID)
 }

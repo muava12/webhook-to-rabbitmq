@@ -6,7 +6,7 @@ const API = ''
 interface Source { id: string; name: string; path: string; auth_token: string; routes: Route[]; created_at: number }
 interface Route { id: string; source_id: string; exchange: string; routing_key: string; device_filter: string; filter_field: string; enabled: boolean }
 interface Queue { name: string; messages_ready: number; messages_unacknowledged: number; consumers: number }
-interface Health { rabbitmq: boolean; queued: number }
+interface Health { rabbitmq: boolean; queued: number; rabbitmq_connected?: boolean; rmq_api_reachable?: boolean; buffered_files?: number; source_count?: number }
 interface RMQCfg { host: string; port: string; user: string; password: string; vhost: string; exchange: string }
 interface Config { version: number; rabbitmq: RMQCfg; sources: Source[] }
 
@@ -39,8 +39,15 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const h = await api<Health>(API + '/health')
-      setHealth(h)
+      const s = await api<Health>(API + '/api/status')
+      setHealth({
+        rabbitmq: s.rabbitmq_connected ?? false,
+        queued: s.buffered_files ?? 0,
+        rabbitmq_connected: s.rabbitmq_connected,
+        rmq_api_reachable: s.rmq_api_reachable,
+        buffered_files: s.buffered_files,
+        source_count: s.source_count
+      })
     } catch { setHealth({ rabbitmq: false, queued: 0 }) }
     try { setConfig(await api<Config>(API + '/api/config')) } catch {}
     try { setQueues(await api<Queue[]>(API + '/api/queues')) } catch {}
@@ -89,9 +96,17 @@ export default function App() {
       <main className="main">
         <div className="top">
           <h2>{tabLabel[tab]}</h2>
-          <div className="badge">
-            <span className={'dot ' + (health.rabbitmq ? 'green' : 'red')}></span>
-            <span>{health.rabbitmq ? 'Connected' : 'Disconnected'}</span>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            <div className="badge">
+              <span className={'dot ' + (health.rabbitmq ? 'green' : 'red')}></span>
+              <span>RMQ {health.rabbitmq ? 'Connected' : 'Disconnected'}</span>
+            </div>
+            {health.rmq_api_reachable !== undefined && (
+              <div className="badge">
+                <span className={'dot ' + (health.rmq_api_reachable ? 'green' : 'red')}></span>
+                <span>API {health.rmq_api_reachable ? 'OK' : 'Error'}</span>
+              </div>
+            )}
           </div>
         </div>
 

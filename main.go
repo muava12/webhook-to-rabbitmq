@@ -696,6 +696,7 @@ func (ws *WebhookService) handleWebhook(w http.ResponseWriter, r *http.Request) 
 	json.Unmarshal(data, &payload)
 
 	matched := 0
+	errors := make([]string, 0)
 	for _, route := range source.Routes {
 		if !route.Enabled {
 			continue
@@ -706,20 +707,26 @@ func (ws *WebhookService) handleWebhook(w http.ResponseWriter, r *http.Request) 
 		err := ws.publishMessage(route.RoutingKey, data)
 		if err != nil {
 			log.Printf("Failed to route to %s: %v", route.RoutingKey, err)
+			errors = append(errors, fmt.Sprintf("%s: %v", route.RoutingKey, err))
 		} else {
 			matched++
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if matched == 0 {
-		// No route matched, forward to default
-		rk := ROUTING_PREFIX + "." + name
-		ws.publishMessage(rk, data)
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "routing_key": rk, "matched": 0})
-	} else {
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "matched": matched})
+	resp := map[string]interface{}{"status": "success", "matched": matched}
+	if len(errors) > 0 {
+		resp["routing_errors"] = errors
 	}
+	if matched == 0 && len(errors) == 0 {
+		rk := ROUTING_PREFIX + "." + name
+		if err := ws.publishMessage(rk, data); err != nil {
+			resp["warning"] = fmt.Sprintf("default route failed: %v", err)
+		} else {
+			resp["routing_key"] = rk
+		}
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 // Health check endpoint with TTL info in minutes and days
@@ -804,6 +811,60 @@ func (ws *WebhookService) queueStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(filtered)
 }
 
+// Full status with RMQ connection health and route details
+func (ws *WebhookService) fullStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := ws.config.GetConfig()
+	buffered := ws.getBufferedFileCount()
+
+	ws.mutex.RLock()
+	connected := ws.isConnected
+	ws.mutex.RUnlock()
+
+	// Check RMQ queue status via mgmt API
+	rmqMgmtOK := true
+	mgmtURL := fmt.Sprintf("%s/api/queues", RMQ_MGMT_URL)
+	mreq, _ := http.NewRequest("GET", mgmtURL, nil)
+	mreq.SetBasicAuth(RMQ_MGMT_USER, RMQ_MGMT_PASSWORD)
+	mclient := &http.Client{Timeout: 3 * time.Second}
+	_, err := mclient.Do(mreq)
+	if err != nil {
+		rmqMgmtOK = false
+	}
+
+	// Build route health summary
+	sources := make([]map[string]interface{}, 0)
+	for _, src := range cfg.Sources {
+		routes := make([]map[string]interface{}, 0)
+		for _, r := range src.Routes {
+			routes = append(routes, map[string]interface{}{
+				"routing_key":   r.RoutingKey,
+				"device_filter": r.DeviceFilter,
+				"exchange":      r.Exchange,
+				"enabled":       r.Enabled,
+			})
+		}
+		sources = append(sources, map[string]interface{}{
+			"id":     src.ID,
+			"name":   src.Name,
+			"path":   src.Path,
+			"routes": routes,
+			"route_count": len(routes),
+		})
+	}
+
+	status := map[string]interface{}{
+		"rabbitmq_connected": connected,
+		"rmq_api_reachable":  rmqMgmtOK,
+		"buffered_files":     buffered,
+		"source_count":       len(cfg.Sources),
+		"sources":            sources,
+		"timestamp":          time.Now().Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
 // Test notification (minimal)
 func (ws *WebhookService) testNotification(w http.ResponseWriter, r *http.Request) {
 	ws.sendNotification(SimpleNotify{
@@ -829,11 +890,11 @@ func (ws *WebhookService) createSource(w http.ResponseWriter, r *http.Request) {
 		AuthToken string `json:"auth_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeErr(w, "invalid json", http.StatusBadRequest)
 		return
 	}
 	if body.Name == "" {
-		http.Error(w, `{"error":"name required"}`, http.StatusBadRequest)
+		writeErr(w, "name required", http.StatusBadRequest)
 		return
 	}
 	path := body.Path
@@ -842,7 +903,7 @@ func (ws *WebhookService) createSource(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := ws.config.UpsertSource(body.Name, path, body.AuthToken)
 	if err != nil {
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		writeErr(w, "save failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -851,11 +912,11 @@ func (ws *WebhookService) createSource(w http.ResponseWriter, r *http.Request) {
 
 func (ws *WebhookService) deleteSource(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if ws.config.DeleteSource(vars["id"]) {
-		w.Write([]byte(`{"status":"deleted"}`))
-	} else {
-		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	if err := ws.config.DeleteSource(vars["id"]); err != nil {
+		writeErr(w, err.Error(), http.StatusNotFound)
+		return
 	}
+	writeOK(w, "deleted")
 }
 
 func (ws *WebhookService) createRoute(w http.ResponseWriter, r *http.Request) {
@@ -863,38 +924,53 @@ func (ws *WebhookService) createRoute(w http.ResponseWriter, r *http.Request) {
 		SourceID     string `json:"source_id"`
 		Exchange     string `json:"exchange"`
 		RoutingKey   string `json:"routing_key"`
-		QueuePrefix  string `json:"queue_prefix"`
 		DeviceFilter string `json:"device_filter"`
 		FilterField  string `json:"filter_field"`
 		Enabled      bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeErr(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.SourceID == "" {
+		writeErr(w, "source_id required", http.StatusBadRequest)
+		return
+	}
+	if body.RoutingKey == "" {
+		writeErr(w, "routing_key required", http.StatusBadRequest)
 		return
 	}
 	if body.FilterField == "" {
 		body.FilterField = "device_id"
 	}
-	if body.Exchange == "" {
-		body.Exchange = EXCHANGE_NAME
-	}
 	route, err := ws.config.UpsertRoute(body.SourceID, body.Exchange,
-		body.RoutingKey, body.QueuePrefix, body.DeviceFilter, body.FilterField, body.Enabled, 0)
+		body.RoutingKey, "", body.DeviceFilter, body.FilterField, body.Enabled, 0)
 	if err != nil {
-		http.Error(w, `{"error":"source not found"}`, http.StatusNotFound)
+		writeErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(route)
 }
 
+func writeErr(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func writeOK(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": msg})
+}
+
 func (ws *WebhookService) deleteRoute(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if ws.config.DeleteRoute(vars["id"]) {
-		w.Write([]byte(`{"status":"deleted"}`))
-	} else {
-		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	if err := ws.config.DeleteRoute(vars["id"]); err != nil {
+		writeErr(w, err.Error(), http.StatusNotFound)
+		return
 	}
+	writeOK(w, "deleted")
 }
 
 func (ws *WebhookService) getRMQConfig(w http.ResponseWriter, r *http.Request) {
@@ -913,10 +989,13 @@ func (ws *WebhookService) getRMQConfig(w http.ResponseWriter, r *http.Request) {
 func (ws *WebhookService) updateRMQConfig(w http.ResponseWriter, r *http.Request) {
 	var rmq RMQConfig
 	if err := json.NewDecoder(r.Body).Decode(&rmq); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+		writeErr(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	ws.config.UpdateRMQ(rmq)
+	if err := ws.config.UpdateRMQ(rmq); err != nil {
+		writeErr(w, "save failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	// Trigger reconnect
 	ws.mutex.Lock()
 	ws.isConnected = false
@@ -924,8 +1003,7 @@ func (ws *WebhookService) updateRMQConfig(w http.ResponseWriter, r *http.Request
 	if ws.conn != nil {
 		ws.conn.Close()
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status":"updated"})
+	writeOK(w, "updated")
 }
 
 func main() {
@@ -954,6 +1032,7 @@ func main() {
 
 	// Utility endpoints
 	r.HandleFunc("/health", webhookService.healthCheck).Methods("GET")
+	r.HandleFunc("/api/status", webhookService.fullStatus).Methods("GET")
 	r.HandleFunc("/api/queues", webhookService.queueStatus).Methods("GET")
 	r.HandleFunc("/test-notification", webhookService.testNotification).Methods("GET")
 
