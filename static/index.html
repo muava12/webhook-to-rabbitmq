@@ -32,7 +32,6 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .dot{width:8px;height:8px;border-radius:50%}
 .dot.green{background:var(--accent);box-shadow:0 0 8px rgba(0,212,170,.4)}
 .dot.red{background:var(--err);box-shadow:0 0 8px rgba(239,68,68,.4)}
-.dot.idle{background:var(--muted)}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:24px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
 .card-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
@@ -49,16 +48,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--f
 .sb{font-size:10px;padding:2px 8px;border-radius:10px;background:var(--accent-dim);color:var(--accent);font-family:var(--mono)}
 .sb-body{padding:0 16px 16px;display:none}
 .sb-body.open{display:block}
-.row{display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
-.row label{font-size:11px;color:var(--muted);min-width:100px}
-.row input{flex:1;min-width:200px}
-.route{display:grid;grid-template-columns:auto 1fr auto auto auto;gap:8px;align-items:center;padding:10px 12px;margin:6px 0;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:12px}
-.rf{font-family:var(--mono);font-weight:500;color:var(--accent);min-width:80px}
-.rk{font-family:var(--mono);color:var(--text)}
-.rex{font-size:11px;color:var(--muted);font-family:var(--mono)}
 .in{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:7px 10px;color:var(--text);font-family:var(--font);font-size:12px}
 .in:focus{outline:none;border-color:var(--accent)}
 .in-m{font-family:var(--mono)}
+.helptext{font-size:11px;color:var(--muted);margin-top:2px}
 .btn{background:var(--accent);color:var(--bg);border:none;border-radius:4px;padding:7px 14px;font-family:var(--font);font-weight:600;font-size:12px;cursor:pointer;transition:.15s;white-space:nowrap}
 .btn:hover{opacity:.85}.btn-sm{padding:5px 10px;font-size:11px}
 .btno{background:transparent;border:1px solid var(--border);color:var(--text)}
@@ -72,12 +65,16 @@ tr:hover td{background:var(--surface2)}
 .qt.m{background:var(--accent-dim);color:var(--accent)}
 .qt.r{background:rgba(245,158,11,.12);color:var(--warn)}
 .qt.d{background:rgba(239,68,68,.12);color:var(--err)}
+.route{display:grid;grid-template-columns:auto 1fr auto auto;gap:8px;align-items:center;padding:10px 12px;margin:6px 0;background:var(--bg);border-radius:6px;border:1px solid var(--border);font-size:12px}
+.rf{font-family:var(--mono);font-weight:500;color:var(--accent);min-width:80px}
+.rk{font-family:var(--mono);color:var(--text)}
+.rdel{background:none;border:1px solid var(--border);color:var(--err);cursor:pointer;border-radius:4px;padding:4px 8px;font-size:11px;font-family:var(--mono)}
+.rdel:hover{background:rgba(239,68,68,.12)}
 .tester{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:24px}
 .tester textarea{width:100%;min-height:100px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;color:var(--text);font-family:var(--mono);font-size:12px;resize:vertical;margin-top:8px}
 .tresp{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px;font-family:var(--mono);font-size:11px;white-space:pre-wrap;max-height:200px;overflow:auto;margin-top:8px;display:none}
 .toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--accent);border-radius:8px;padding:12px 16px;font-size:13px;box-shadow:0 4px 20px rgba(0,0,0,.4);display:none;z-index:100;max-width:400px}
 .toast.err{border-color:var(--err)}
-/* Settings form */
 .settings-box{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:500px}
 .settings-box .field{margin-bottom:14px}
 .settings-box .field label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:4px}
@@ -102,7 +99,7 @@ tr:hover td{background:var(--surface2)}
       <div class="tab" data-tab="tester"><span class="tab-icon">🧪</span><span>Tester</span></div>
       <div class="tab" data-tab="settings" style="margin-top:auto;border-top:1px solid var(--border);padding-top:12px"><span class="tab-icon">⚙️</span><span>Settings</span></div>
     </nav>
-    <div class="sidebar-footer">v0.1.0</div>
+    <div class="sidebar-footer">v0.2.0</div>
   </aside>
   <main class="main">
     <div class="top-bar">
@@ -110,20 +107,17 @@ tr:hover td{background:var(--surface2)}
       <div class="badge" id="statusBadge"><span class="dot green" id="connDot"></span><span id="connLabel">connected</span></div>
     </div>
 
-    <!-- Tab: Sources -->
+    <!-- Sources tab -->
     <div id="tabSources">
       <div class="section"><h3>Webhook Sources</h3><button class="btn btn-sm" id="btnAddSource">+ New Source</button></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
-        Each source is an HTTP endpoint that receives webhooks. 
-        Routes define how to distribute messages based on device field.
-      </div>
+      <div class="helptext" style="margin-bottom:12px">Each source is an HTTP endpoint. Routes distribute messages based on device filter.</div>
       <div id="addSourceForm" style="display:none" class="af">
         <div>
-          <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Source name</div>
+          <div class="helptext" style="margin-bottom:2px">Name</div>
           <input class="in in-m" id="newSrcName" placeholder="e.g. myapp" style="width:180px">
         </div>
         <div>
-          <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Webhook path</div>
+          <div class="helptext" style="margin-bottom:2px">Webhook path</div>
           <input class="in in-m" id="newSrcPath" placeholder="/webhook/myapp" style="width:250px">
         </div>
         <button class="btn btn-sm" id="btnCreateSrc" style="margin-top:12px">Create</button>
@@ -132,7 +126,7 @@ tr:hover td{background:var(--surface2)}
       <div id="sourceList"></div>
     </div>
 
-    <!-- Tab: Queues -->
+    <!-- Queues tab -->
     <div id="tabQueues" style="display:none">
       <div class="cards" id="qCards">
         <div class="card"><div class="card-label">Messages</div><div class="card-value green" id="qMsg">—</div></div>
@@ -143,7 +137,7 @@ tr:hover td{background:var(--surface2)}
       <table><thead><tr><th>Queue</th><th>Ready</th><th>Unacked</th><th>Consumers</th></tr></thead><tbody id="queueBody"></tbody></table>
     </div>
 
-    <!-- Tab: Tester -->
+    <!-- Tester tab -->
     <div id="tabTester" style="display:none">
       <div class="tester">
         <div style="display:flex;gap:8px;margin-bottom:8px">
@@ -158,47 +152,48 @@ tr:hover td{background:var(--surface2)}
       </div>
     </div>
 
-    <!-- Tab: Settings -->
+    <!-- Settings tab -->
     <div id="tabSettings" style="display:none">
       <div class="section"><h3>RabbitMQ Connection</h3></div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:16px">
-        Settings below override environment variables. Leave empty to use env defaults.
-        Saving will disconnect and reconnect automatically.
+      <div class="helptext" style="margin-bottom:16px">
+        Override env vars with custom RMQ settings. Empty = use env defaults.
+        Save = disconnect & reconnect with new values.
       </div>
       <div class="settings-box">
         <div class="field">
           <label>Host</label>
           <input class="in in-m" id="rmqHost" placeholder="e.g. 100.100.50.102 or rabbitmq">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ server hostname or IP address</div>
+          <div class="helptext">RabbitMQ server hostname or IP</div>
         </div>
         <div class="field">
           <label>Port</label>
           <input class="in in-m" id="rmqPort" placeholder="5672">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">AMQP port (default: 5672)</div>
+          <div class="helptext">AMQP port (default: 5672)</div>
         </div>
         <div class="field">
           <label>User</label>
           <input class="in in-m" id="rmqUser" placeholder="guest">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ username</div>
+          <div class="helptext">RabbitMQ username</div>
         </div>
         <div class="field">
           <label>Password</label>
           <input class="in in-m" id="rmqPass" type="password" placeholder="Enter password">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">RabbitMQ password</div>
+          <div class="helptext">RabbitMQ password</div>
         </div>
         <div class="field">
           <label>VHost</label>
           <input class="in in-m" id="rmqVhost" placeholder="/">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Virtual host (default: /)</div>
+          <div class="helptext">Virtual host (default: /)</div>
         </div>
         <div class="field">
           <label>Exchange</label>
           <input class="in in-m" id="rmqExchange" placeholder="gowa">
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">Default exchange name for webhook routing</div>
+          <div class="helptext">Default exchange for webhook routing</div>
         </div>
-        <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+        <div style="margin-top:16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn" id="btnSaveRMQ">Save & Reconnect</button>
-          <span id="rmqStatus" style="font-size:12px;color:var(--muted)"></span>
+          <button class="btn btn-sm btno" id="btnRevertRMQ">↩ Use Env Defaults</button>
+          <span id="rmqStatus" class="helptext"></span>
         </div>
       </div>
     </div>
@@ -210,12 +205,10 @@ tr:hover td{background:var(--surface2)}
 <script>
 const API = '';
 let health, queues = [], config = {sources:[]};
-
+let expanded = new Set(); // track expanded source cards
 const $ = id => document.getElementById(id);
-
-async function fj(u,o){const r=await fetch(u,o);const t=await r.text();try{return JSON.parse(t)}catch(e){return t}}
-
-function t(m,e){const n=$('toast');n.textContent=m;n.className='toast'+(e?' err':'');n.style.display='block';setTimeout(()=>n.style.display='none',3000)}
+const fj = async(u,o)=>{const r=await fetch(u,o);return r.json()};
+const t = (m,e)=>{const n=$('toast');n.textContent=m;n.className='toast'+(e?' err':'');n.style.display='block';setTimeout(()=>n.style.display='none',3000)};
 
 async function load(){
   try{
@@ -226,127 +219,143 @@ async function load(){
   try{config=await fj(API+'/api/config')}catch(e){}
   try{queues=await fj(API+'/api/queues')}catch(e){}
   renderSources();renderQueues();
-  // Fetch RMQ config for settings prefill (background)
-  try{ const r = await fetch(API+'/api/rmq'); const rc = await r.json();
-    Object.assign(rc, {host:rc.host||'',port:rc.port||'',user:rc.user||'',password:rc.password||'',vhost:rc.vhost||'',exchange:rc.exchange||''});
-    $('rmqHost').value=rc.host;$('rmqPort').value=rc.port;$('rmqUser').value=rc.user;
-    $('rmqPass').value=rc.password;$('rmqVhost').value=rc.vhost;$('rmqExchange').value=rc.exchange;
+  // Prefill RMQ settings
+  try{const r=await fetch(API+'/api/rmq');const c=await r.json();
+    $('rmqHost').value=c.host||'';$('rmqPort').value=c.port||'';
+    $('rmqUser').value=c.user||'';$('rmqPass').value=c.password||'';
+    $('rmqVhost').value=c.vhost||'';$('rmqExchange').value=c.exchange||'';
   }catch(e){}
 }
 
 // Tabs
-document.querySelectorAll('.tab').forEach(t=>{
-  t.onclick=()=>{
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.onclick=()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    ['sources','queues','tester','settings'].forEach(id=>{
-      $('tab'+id.charAt(0).toUpperCase()+id.slice(1)).style.display=id===t.dataset.tab?'block':'none';
+    tab.classList.add('active');
+    ['Sources','Queues','Tester','Settings'].forEach(id=>{
+      $('tab'+id).style.display=id===tab.dataset.tab.charAt(0).toUpperCase()+tab.dataset.tab.slice(1)?'block':'none';
     });
-    $('pageTitle').textContent={sources:'Sources',queues:'Queues',tester:'Tester',settings:'Settings'}[t.dataset.tab];
+    $('pageTitle').textContent=tab.dataset.tab.charAt(0).toUpperCase()+tab.dataset.tab.slice(1);
   };
 });
 
-// ---- Sources ----
+// ========== Sources ==========
 function renderSources(){
   const list=$('sourceList');
   const srcs=config.sources||[];
-  list.innerHTML=srcs.length?'':'<div style="padding:24px;text-align:center;color:var(--muted);font-size:13px">No webhook sources yet. Click "+ New" to add one.</div>';
+  list.innerHTML=srcs.length?'':'<div style="padding:24px;text-align:center;color:var(--muted)">No webhook sources yet.</div>';
   srcs.forEach((s,i)=>{
     const card=document.createElement('div');card.className='sc';
     const nr=(s.routes||[]).length;
     card.innerHTML=`
-      <div class="sh" data-idx="${i}">
+      <div class="sh" data-id="${s.id}">
         <div><div class="sp">${s.path||'/webhook/'+s.name}</div><div class="sn">${s.name}</div></div>
         <div class="sa">
           <span class="sb">${nr} route${nr!==1?'s':''}</span>
           <button class="btn btn-sm btno ds" data-id="${s.id}" title="Delete">✕</button>
         </div>
       </div>
-      <div class="sb-body" id="sb${i}">
-        <div style="font-size:11px;color:var(--muted);margin:12px 0 8px;padding:8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
-          Routes: when <strong>device filter</strong> matches the payload field, message is sent to <strong>routing key</strong>.
-          Use <code>*</code> for catch-all, <code>abc</code> for exact match, <code>s23*</code> for prefix match.
+      <div class="sb-body" id="sb${s.id}">
+        <div class="helptext" style="margin:12px 0 8px;padding:8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)">
+          <strong>Device filter</strong> → <strong>routing key</strong>:
+          <code>*</code> = all, <code>abc</code> = exact, <code>s23*</code> = prefix
         </div>
-        <div id="routes${i}"></div>
+        <div id="routes${s.id}"></div>
         <div class="af" style="margin-top:8px">
           <div>
-            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Device filter</div>
-            <input class="in in-m" id="rf${i}" placeholder='"*", "s23*", or "abc"' style="width:140px">
+            <div class="helptext" style="margin-bottom:2px">Device filter</div>
+            <input class="in in-m" id="rf${s.id}" placeholder='"*", "s23*", "abc"' style="width:140px">
           </div>
           <div>
-            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Routing key</div>
-            <input class="in in-m" id="rk${i}" placeholder='e.g. wa.abc' style="width:160px">
+            <div class="helptext" style="margin-bottom:2px">Routing key</div>
+            <input class="in in-m" id="rk${s.id}" placeholder='e.g. wa.abc' style="width:160px">
           </div>
           <div>
-            <div style="font-size:10px;color:var(--muted);margin-bottom:2px">Filter field</div>
-            <input class="in in-m" id="rfd${i}" placeholder='device_id' style="width:100px" value="device_id">
+            <div class="helptext" style="margin-bottom:2px">Filter field</div>
+            <input class="in in-m" id="rfd${s.id}" placeholder='device_id' style="width:100px" value="device_id">
           </div>
-          <button class="btn btn-sm" data-si="${s.id}" data-idx="${i}" data-act="ar" style="margin-top:12px">+ Add Route</button>
+          <button class="btn btn-sm" data-si="${s.id}" data-act="ar" style="margin-top:12px">+ Add Route</button>
         </div>
       </div>`;
     list.appendChild(card);
+
+    // Toggle expand
     card.querySelector('.sh').onclick=e=>{
       if(e.target.closest('.ds'))return;
-      const b=card.querySelector('.sb-body');b.classList.toggle('open');
-      if(b.classList.contains('open'))renderRoutes(s,i);
+      const b=card.querySelector('.sb-body');
+      b.classList.toggle('open');
+      if(b.classList.contains('open')){expanded.add(s.id);renderRoutes(s);}
+      else expanded.delete(s.id);
     };
+
+    // Delete source
     card.querySelector('.ds').onclick=async e=>{
       e.stopPropagation();
       if(!confirm('Delete "'+s.name+'"?'))return;
-      await fj(API+'/api/sources/'+s.id,{method:'DELETE'});t('Deleted');await load();
+      expanded.delete(s.id);
+      await fj(API+'/api/sources/'+s.id,{method:'DELETE'});t('Deleted');load();
     };
+
+    // Restore expand state
+    if(expanded.has(s.id)){
+      card.querySelector('.sb-body').classList.add('open');
+      renderRoutes(s);
+    }
   });
-  document.querySelectorAll('[data-act="ar"]').forEach(b=>{
-    b.onclick=async()=>{
-      const idx=parseInt(b.dataset.idx),si=b.dataset.si;
-      const filter=$('rf'+idx).value.trim(),rk=$('rk'+idx).value.trim(),fd=$('rfd'+idx).value.trim()||'device_id';
+
+  // Add route handlers
+  document.querySelectorAll('[data-act="ar"]').forEach(btn=>{
+    btn.onclick=async()=>{
+      const si=btn.dataset.si;
+      const filter=$('rf'+si).value.trim(),rk=$('rk'+si).value.trim(),fd=$('rfd'+si).value.trim()||'device_id';
       if(!filter||!rk){t('Filter and routing key required',1);return}
+      expanded.add(si);
       await fj(API+'/api/routes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source_id:si,routing_key:rk,device_filter:filter,filter_field:fd,enabled:true})});
-      t('Route added');await load();
-      const sb=$('sb'+idx);if(sb)sb.classList.add('open');
-      renderRoutes((config.sources||[]).find(s=>s.id===si),idx);
+      t('Route added');
+      load();
     };
   });
 }
-function renderRoutes(src,idx){
-  const c=$('routes'+idx);if(!c)return;
+
+function renderRoutes(src){
+  const c=$('routes'+src.id);if(!c)return;
   const rs=src.routes||[];
-  c.innerHTML=rs.length?'':'<div style="padding:8px;color:var(--muted);font-size:12px">No routes.</div>';
+  c.innerHTML=rs.length?'':'<div style="padding:8px;color:var(--muted);font-size:12px">No routes yet.</div>';
   rs.forEach(r=>{
     const row=document.createElement('div');row.className='route';
-    row.innerHTML=`<span class="rf">${r.device_filter}</span><span class="rk">→ ${r.routing_key}</span><span class="rex">${r.exchange||'def'}</span><span style="font-size:11px;color:var(--muted)">${r.filter_field||'device_id'}</span><button class="btno btn-sm rd" data-id="${r.id}">✕</button>`;
-    row.querySelector('.rd').onclick=async()=>{
+    row.innerHTML=`<span class="rf">${r.device_filter}</span><span class="rk">→ ${r.routing_key}</span><span class="helptext">${r.exchange||'def'}</span><span class="helptext">${r.filter_field||'device_id'}</span><button class="rdel" data-id="${r.id}">✕</button>`;
+    row.querySelector('.rdel').onclick=async()=>{
       if(!confirm('Delete route?'))return;
-      await fj(API+'/api/routes/'+r.id,{method:'DELETE'});t('Deleted');await load();
-      renderRoutes((config.sources||[]).find(s=>s.id===src.id),idx);
+      expanded.add(src.id);
+      await fj(API+'/api/routes/'+r.id,{method:'DELETE'});
+      t('Route deleted');
+      load();
     };
     c.appendChild(row);
   });
 }
+
 $('btnAddSource').onclick=()=>{$('addSourceForm').style.display='flex';$('newSrcName').focus()};
 $('btnCancelSrc').onclick=()=>{$('addSourceForm').style.display='none'};
 $('btnCreateSrc').onclick=async()=>{
   const n=$('newSrcName').value.trim(),p=$('newSrcPath').value.trim()||'/webhook/'+n;
   if(!n){t('Name required',1);return}
   await fj(API+'/api/sources',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,path:p})});
-  t('Created');$('addSourceForm').style.display='none';$('newSrcName').value='';$('newSrcPath').value='';await load();
+  t('Created');$('addSourceForm').style.display='none';$('newSrcName').value='';$('newSrcPath').value='';load();
 };
 
-// ---- Queues ----
+// ========== Queues ==========
 function renderQueues(){
   const qs=Array.isArray(queues)?queues:[];
   $('qMsg').textContent=qs.reduce((a,b)=>a+(b.messages_ready||0),0);
   $('qCons').textContent=qs.reduce((a,b)=>a+(b.consumers||0),0);
   $('qCount').textContent=qs.length;
   $('qBuf').textContent=health.queued??0;
-  function qt(n){if(n.endsWith('_retry'))return'r';if(n.endsWith('_dlq'))return'd';return'm'}
-  $('queueBody').innerHTML=qs.map(q=>{
-    const t=qt(q.name);
-    return `<tr><td>${q.name} <span class="qt ${t}">${t==='r'?'retry':t==='d'?'dlq':'main'}</span></td><td>${q.messages_ready||0}</td><td>${q.messages_unacknowledged||0}</td><td>${q.consumers||0}</td></tr>`;
-  }).join('');
+  const label=n=>{if(n.endsWith('_retry'))return'retry';if(n.endsWith('_dlq'))return'dlq';return'main'};
+  $('queueBody').innerHTML=qs.map(q=>`<tr><td>${q.name} <span class="qt ${label(q.name)[0]}">${label(q.name)}</span></td><td>${q.messages_ready||0}</td><td>${q.messages_unacknowledged||0}</td><td>${q.consumers||0}</td></tr>`).join('');
 }
 
-// ---- Tester ----
+// ========== Tester ==========
 $('tBodyToggle').onclick=()=>{$('tBodyWrap').style.display=$('tBodyWrap').style.display==='block'?'none':'block'};
 $('tSend').onclick=async()=>{
   const path=$('tPath').value,body=$('tBody').value||'{}',resp=$('tResp');
@@ -355,21 +364,29 @@ $('tSend').onclick=async()=>{
   catch(e){resp.textContent=`Error: ${e.message}`}
 };
 
-// ---- Settings ----
-function renderSettings(){
-  // Already prefilled in load() from /api/rmq
-}
+// ========== Settings ==========
 $('btnSaveRMQ').onclick=async()=>{
-  const $s=$('rmqStatus');$s.textContent='saving…';
-  const body=JSON.stringify({
-    host:$('rmqHost').value.trim(),port:$('rmqPort').value.trim(),
-    user:$('rmqUser').value.trim(),password:$('rmqPass').value,
-    vhost:$('rmqVhost').value.trim(),exchange:$('rmqExchange').value.trim()
-  });
+  const s=$('rmqStatus');s.textContent='Saving…';
   try{
-    const r=await fj(API+'/api/rmq',{method:'PUT',headers:{'Content-Type':'application/json'},body});
-    if(r.status==='updated'){$s.textContent='✓ Saved, reconnecting…';setTimeout(()=>{$s.textContent=''},3000);t('RMQ config saved. Reconnecting…');}
-  }catch(e){$s.textContent='✗ Failed';t('Save failed',1)}
+    await fj(API+'/api/rmq',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      host:$('rmqHost').value.trim(),port:$('rmqPort').value.trim(),
+      user:$('rmqUser').value.trim(),password:$('rmqPass').value,
+      vhost:$('rmqVhost').value.trim(),exchange:$('rmqExchange').value.trim()
+    })});
+    s.textContent='✓ Saved, reconnecting…';t('RMQ config saved');
+    setTimeout(()=>{s.textContent='';load()},3000);
+  }catch(e){s.textContent='✗ Failed';t('Save failed',1)}
+};
+
+$('btnRevertRMQ').onclick=async()=>{
+  if(!confirm('Clear RMQ config and use environment defaults?'))return;
+  const s=$('rmqStatus');s.textContent='Resetting…';
+  try{
+    // Send empty config to clear saved values
+    await fj(API+'/api/rmq',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    s.textContent='✓ Using env defaults';t('Reverted to env defaults');
+    setTimeout(()=>{s.textContent='';load()},3000);
+  }catch(e){s.textContent='✗ Failed';t('Revert failed',1)}
 };
 
 load();
