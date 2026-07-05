@@ -227,7 +227,7 @@ export default function App() {
 						<span>Settings</span>
 					</div>
 				</nav>
-				<div className="footer">v0.3.0</div>
+				<div className="footer">v0.3.1</div>
 			</aside>
 
 			<main className="main">
