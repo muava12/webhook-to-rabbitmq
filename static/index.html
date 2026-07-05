@@ -206,9 +206,27 @@ tr:hover td{background:var(--surface2)}
 const API = '';
 let health, queues = [], config = {sources:[]};
 let expanded = new Set(); // track expanded source cards
+let settingsPrefilled = false; // flag: only prefill settings once
 const $ = id => document.getElementById(id);
 const fj = async(u,o)=>{const r=await fetch(u,o);return r.json()};
 const t = (m,e)=>{const n=$('toast');n.textContent=m;n.className='toast'+(e?' err':'');n.style.display='block';setTimeout(()=>n.style.display='none',3000)};
+
+// Save & restore route form inputs across re-renders
+function saveRouteForms(){
+  const vals={};
+  (config.sources||[]).forEach(s=>{
+    const rf=$('rf'+s.id),rk=$('rk'+s.id),rfd=$('rfd'+s.id);
+    if(rf)vals['rf'+s.id]=rf.value;
+    if(rk)vals['rk'+s.id]=rk.value;
+    if(rfd)vals['rfd'+s.id]=rfd.value;
+  });
+  return vals;
+}
+function restoreRouteForms(vals){
+  Object.entries(vals).forEach(([id,val]) => {
+    const el=$(id);if(el)el.value=val;
+  });
+}
 
 async function load(){
   try{
@@ -218,13 +236,20 @@ async function load(){
   }catch(e){health={rabbitmq:false,queued:0}}
   try{config=await fj(API+'/api/config')}catch(e){}
   try{queues=await fj(API+'/api/queues')}catch(e){}
-  renderSources();renderQueues();
-  // Prefill RMQ settings
-  try{const r=await fetch(API+'/api/rmq');const c=await r.json();
-    $('rmqHost').value=c.host||'';$('rmqPort').value=c.port||'';
-    $('rmqUser').value=c.user||'';$('rmqPass').value=c.password||'';
-    $('rmqVhost').value=c.vhost||'';$('rmqExchange').value=c.exchange||'';
-  }catch(e){}
+  // Save route form values before re-render
+  const savedForms = saveRouteForms();
+  renderSources();
+  restoreRouteForms(savedForms);
+  renderQueues();
+  // Prefill RMQ settings ONLY on first load (not on interval)
+  if(!settingsPrefilled){
+    settingsPrefilled=true;
+    try{const r=await fetch(API+'/api/rmq');const c=await r.json();
+      $('rmqHost').value=c.host||'';$('rmqPort').value=c.port||'';
+      $('rmqUser').value=c.user||'';$('rmqPass').value=c.password||'';
+      $('rmqVhost').value=c.vhost||'';$('rmqExchange').value=c.exchange||'';
+    }catch(e){}
+  }
 }
 
 // Tabs
@@ -236,6 +261,18 @@ document.querySelectorAll('.tab').forEach(tab=>{
       $('tab'+id).style.display=id===tab.dataset.tab.charAt(0).toUpperCase()+tab.dataset.tab.slice(1)?'block':'none';
     });
     $('pageTitle').textContent=tab.dataset.tab.charAt(0).toUpperCase()+tab.dataset.tab.slice(1);
+    // Re-prefill settings when user opens tab
+    if(tab.dataset.tab==='settings'){
+      settingsPrefilled=false;
+      (async()=>{
+        try{const r=await fetch(API+'/api/rmq');const c=await r.json();
+          $('rmqHost').value=c.host||'';$('rmqPort').value=c.port||'';
+          $('rmqUser').value=c.user||'';$('rmqPass').value=c.password||'';
+          $('rmqVhost').value=c.vhost||'';$('rmqExchange').value=c.exchange||'';
+          settingsPrefilled=true;
+        }catch(e){}
+      })();
+    }
   };
 });
 
@@ -365,6 +402,11 @@ $('tSend').onclick=async()=>{
 };
 
 // ========== Settings ==========
+async function refreshSettings(){
+  settingsPrefilled=false; // allow re-prefill
+  await load();
+}
+
 $('btnSaveRMQ').onclick=async()=>{
   const s=$('rmqStatus');s.textContent='Saving…';
   try{
@@ -374,7 +416,7 @@ $('btnSaveRMQ').onclick=async()=>{
       vhost:$('rmqVhost').value.trim(),exchange:$('rmqExchange').value.trim()
     })});
     s.textContent='✓ Saved, reconnecting…';t('RMQ config saved');
-    setTimeout(()=>{s.textContent='';load()},3000);
+    setTimeout(()=>{s.textContent='';refreshSettings()},3000);
   }catch(e){s.textContent='✗ Failed';t('Save failed',1)}
 };
 
@@ -382,10 +424,11 @@ $('btnRevertRMQ').onclick=async()=>{
   if(!confirm('Clear RMQ config and use environment defaults?'))return;
   const s=$('rmqStatus');s.textContent='Resetting…';
   try{
-    // Send empty config to clear saved values
     await fj(API+'/api/rmq',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    settingsPrefilled=false;
+    await load();
     s.textContent='✓ Using env defaults';t('Reverted to env defaults');
-    setTimeout(()=>{s.textContent='';load()},3000);
+    setTimeout(()=>s.textContent='',3000);
   }catch(e){s.textContent='✗ Failed';t('Revert failed',1)}
 };
 
